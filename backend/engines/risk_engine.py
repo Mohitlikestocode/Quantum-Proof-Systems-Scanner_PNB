@@ -39,6 +39,15 @@ def calculate_advanced_risk(
     elif has_1_3:
         protocol_risk = 0
 
+    def protocol_risk(legacy_protocols_supported, superior_protocol_supported):
+    # Check for legacy protocol support
+    if legacy_protocols_supported:
+        return "Not Safe"
+    # If only superior protocols are supported
+    if superior_protocol_supported:
+        return "Safe"
+    return "Not Safe"
+
     # 3. Vulnerability Risk (max 100)
     vuln_risk = 0
     for v in vulnerabilities:
