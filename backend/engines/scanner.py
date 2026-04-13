@@ -346,70 +346,223 @@ def _normalize_app_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
 
 
-def _relevance_score(domain: str, app_name: str) -> float:
+def _tokenize_alpha(value: str) -> List[str]:
+    return [token for token in re.findall(r"[a-zA-Z]{2,}", (value or "").lower()) if token]
+
+
+def _build_acronym(value: str) -> Optional[str]:
+    tokens = [token for token in _tokenize_alpha(value) if len(token) > 2]
+    if len(tokens) < 2:
+        return None
+    acronym = "".join(token[0] for token in tokens)
+    if 2 <= len(acronym) <= 6:
+        return acronym.lower()
+    return None
+
+
+def _extract_brand_hints(domain: str) -> dict:
+    domain_root = (domain or "").split(".")[0].lower()
+    hints = {
+        "queries": [],
+        "tokens": set(),
+        "acronyms": set(),
+        "title": None,
+    }
+
+    if domain_root:
+        hints["queries"].append(domain_root)
+
+    # Heuristic typo handling for compressed banking names.
+    # Example: "manipuralbank" -> "manipur rural bank" -> acronym "mrb".
+    if domain_root.endswith("albank") and len(domain_root) > len("albank") + 2:
+        prefix = domain_root[:-len("albank")]
+        hints["queries"].append(f"{prefix} rural bank")
+    if domain_root.endswith("ruralbank") and len(domain_root) > len("ruralbank") + 2:
+        prefix = domain_root[:-len("ruralbank")]
+        hints["queries"].append(f"{prefix} rural bank")
+
+    # Try to break compressed roots such as "manipuralbank" -> "manipur bank".
+    split_keywords = ["banking", "bank", "finance", "fin", "insurance", "capital"]
+    for keyword in split_keywords:
+        if keyword in domain_root and domain_root != keyword:
+            idx = domain_root.find(keyword)
+            prefix = domain_root[:idx]
+            if len(prefix) >= 3:
+                hints["queries"].append(f"{prefix} {keyword}")
+                hints["queries"].append(prefix)
+
+    homepage_html = ""
+    for url in [f"https://{domain}", f"http://{domain}"]:
+        try:
+            response = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+            if response.status_code < 400 and response.text:
+                homepage_html = response.text
+                break
+        except requests.RequestException:
+            continue
+
+    if homepage_html:
+        title_match = re.search(r"<title>(.*?)</title>", homepage_html, flags=re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title = re.sub(r"\s+", " ", title_match.group(1)).strip()
+            hints["title"] = title
+            hints["queries"].append(title)
+
+        for meta_pattern in [
+            r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']application-name["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)["\']',
+        ]:
+            meta_match = re.search(meta_pattern, homepage_html, flags=re.IGNORECASE)
+            if meta_match:
+                hints["queries"].append(meta_match.group(1).strip())
+
+    for query in hints["queries"]:
+        for token in _tokenize_alpha(query):
+            if len(token) >= 3:
+                hints["tokens"].add(token)
+        acronym = _build_acronym(query)
+        if acronym:
+            hints["acronyms"].add(acronym)
+
+    expanded_queries: List[str] = []
+    seen = set()
+    for query in hints["queries"]:
+        clean = re.sub(r"\s+", " ", (query or "").strip().lower())
+        if clean and clean not in seen:
+            expanded_queries.append(clean)
+            seen.add(clean)
+
+    for acronym in sorted(hints["acronyms"]):
+        for variant in [acronym, f"{acronym} bank", f"{acronym} mobile"]:
+            if variant not in seen:
+                expanded_queries.append(variant)
+                seen.add(variant)
+
+    hints["queries"] = expanded_queries[:8]
+    return hints
+
+
+def _relevance_score(domain: str, app_name: str, app_id: Optional[str] = None, developer: Optional[str] = None, brand_hints: Optional[dict] = None) -> float:
     domain_root = (domain or "").split(".")[0]
     if not domain_root or not app_name:
         return 0.0
-    return round(SequenceMatcher(None, _normalize_app_text(domain_root), _normalize_app_text(app_name)).ratio(), 4)
+
+    brand_hints = brand_hints or {}
+    queries = brand_hints.get("queries") or [domain_root]
+    tokens = set(brand_hints.get("tokens") or [])
+    acronyms = set(brand_hints.get("acronyms") or [])
+
+    app_blob = " ".join([app_name or "", app_id or "", developer or ""]).lower()
+    normalized_app = _normalize_app_text(app_blob)
+
+    best_ratio = 0.0
+    for query in queries:
+        query_norm = _normalize_app_text(query)
+        if not query_norm:
+            continue
+        ratio = SequenceMatcher(None, query_norm, normalized_app).ratio()
+        best_ratio = max(best_ratio, ratio)
+
+    score = best_ratio
+
+    for token in list(tokens)[:10]:
+        if len(token) >= 4 and re.search(rf"\b{re.escape(token)}\b", app_blob):
+            score += 0.08
+
+    for acronym in acronyms:
+        if re.search(rf"\b{re.escape(acronym)}\b", app_blob):
+            score += 0.24
+
+    for query in queries:
+        if query and query in app_blob:
+            score += 0.16
+            break
+
+    return round(min(score, 1.0), 4)
 
 
-def _extract_android_apps(domain: str, limit: int = 15) -> List[dict]:
-    query = domain.split(".")[0]
-    url = f"https://play.google.com/store/search?c=apps&hl=en&gl=us&q={query}"
-    apps: List[dict] = []
+def _extract_android_apps(domain: str, limit: int = 15, brand_hints: Optional[dict] = None) -> List[dict]:
+    queries = (brand_hints or {}).get("queries") or [domain.split(".")[0]]
+    apps_by_id: Dict[str, dict] = {}
 
-    try:
-        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        if response.status_code != 200:
-            return apps
+    for query in queries:
+        url = f"https://play.google.com/store/search?c=apps&hl=en&gl=us&q={requests.utils.quote(query)}"
+        try:
+            response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if response.status_code != 200:
+                continue
 
-        html = response.text
-        candidates = set(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9_.]+)", html))
+            html = response.text
+            candidates = set(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9_.]+)", html))
 
-        for app_id in list(candidates)[:limit]:
-            app_name = app_id
-            name_match = re.search(rf'"title":"([^\"]+)"[^\n\r]*?{re.escape(app_id)}', html)
-            if name_match:
-                app_name = name_match.group(1)
+            for app_id in list(candidates)[:limit]:
+                app_name = app_id
+                developer = None
 
-            apps.append({
-                "platform": "android",
-                "name": app_name,
-                "app_id": app_id,
-                "store_url": f"https://play.google.com/store/apps/details?id={app_id}",
-                "relevance": _relevance_score(domain, app_name),
-            })
-    except requests.RequestException:
-        return apps
+                name_match = re.search(rf'"title":"([^\"]+)"[^\n\r]*?{re.escape(app_id)}', html)
+                if name_match:
+                    app_name = name_match.group(1)
 
-    return apps
+                developer_match = re.search(rf'"developerName":"([^\"]+)"[^\n\r]*?{re.escape(app_id)}', html)
+                if developer_match:
+                    developer = developer_match.group(1)
+
+                app_item = {
+                    "platform": "android",
+                    "name": app_name,
+                    "app_id": app_id,
+                    "developer": developer,
+                    "store_url": f"https://play.google.com/store/apps/details?id={app_id}",
+                    "relevance": _relevance_score(domain, app_name, app_id=app_id, developer=developer, brand_hints=brand_hints),
+                    "matched_query": query,
+                }
+
+                existing = apps_by_id.get(app_id)
+                if not existing or app_item["relevance"] > existing.get("relevance", 0):
+                    apps_by_id[app_id] = app_item
+        except requests.RequestException:
+            continue
+
+    ranked = sorted(apps_by_id.values(), key=lambda item: item.get("relevance", 0), reverse=True)
+    return ranked[:limit]
 
 
-def _extract_itunes_apps(domain: str, limit: int = 15) -> List[dict]:
-    query = domain.split(".")[0]
-    url = f"https://itunes.apple.com/search?term={query}&entity=software&limit={limit}&country=us"
-    apps: List[dict] = []
+def _extract_itunes_apps(domain: str, limit: int = 15, brand_hints: Optional[dict] = None) -> List[dict]:
+    queries = (brand_hints or {}).get("queries") or [domain.split(".")[0]]
+    apps_by_id: Dict[str, dict] = {}
 
-    try:
-        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        if response.status_code != 200:
-            return apps
+    for query in queries:
+        url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&entity=software&limit={limit}&country=us"
+        try:
+            response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if response.status_code != 200:
+                continue
 
-        data = response.json()
-        for item in data.get("results", []):
-            app_name = item.get("trackName") or "Unknown"
-            apps.append({
-                "platform": "ios",
-                "name": app_name,
-                "app_id": item.get("trackId"),
-                "store_url": item.get("trackViewUrl"),
-                "developer": item.get("sellerName"),
-                "relevance": _relevance_score(domain, app_name),
-            })
-    except (requests.RequestException, ValueError):
-        return apps
+            data = response.json()
+            for item in data.get("results", []):
+                app_name = item.get("trackName") or "Unknown"
+                app_id = item.get("trackId")
+                developer = item.get("sellerName")
+                app_item = {
+                    "platform": "ios",
+                    "name": app_name,
+                    "app_id": app_id,
+                    "store_url": item.get("trackViewUrl"),
+                    "developer": developer,
+                    "relevance": _relevance_score(domain, app_name, app_id=str(app_id or ""), developer=developer, brand_hints=brand_hints),
+                    "matched_query": query,
+                }
 
-    return apps
+                key = str(app_id or app_name).lower()
+                existing = apps_by_id.get(key)
+                if not existing or app_item["relevance"] > existing.get("relevance", 0):
+                    apps_by_id[key] = app_item
+        except (requests.RequestException, ValueError):
+            continue
+
+    ranked = sorted(apps_by_id.values(), key=lambda item: item.get("relevance", 0), reverse=True)
+    return ranked[:limit]
 
 
 def _security_header_findings(headers: dict) -> List[dict]:
@@ -993,8 +1146,9 @@ def discover_subdomains(domain: str, scan_mode: str = "Full Deep Scan") -> dict:
 
 def discover_mobile_apps(domain: str) -> dict:
     """Discover mobile apps from Android/iTunes and rank by name relevance to domain."""
-    android_apps = _extract_android_apps(domain)
-    ios_apps = _extract_itunes_apps(domain)
+    brand_hints = _extract_brand_hints(domain)
+    android_apps = _extract_android_apps(domain, brand_hints=brand_hints)
+    ios_apps = _extract_itunes_apps(domain, brand_hints=brand_hints)
     all_apps = android_apps + ios_apps
     ranked = sorted(all_apps, key=lambda app: app.get("relevance", 0), reverse=True)
     top_match = ranked[0] if ranked else None
@@ -1005,6 +1159,11 @@ def discover_mobile_apps(domain: str) -> dict:
         "ios_apps_found": len(ios_apps),
         "apps": ranked,
         "most_relevant_app": top_match,
+        "brand_hints": {
+            "queries": brand_hints.get("queries", []),
+            "acronyms": sorted(list(brand_hints.get("acronyms", set()))),
+            "title": brand_hints.get("title"),
+        },
     }
 
 
