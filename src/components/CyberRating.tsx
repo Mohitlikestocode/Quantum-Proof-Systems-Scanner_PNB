@@ -4,7 +4,7 @@ const CyberRating = () => {
   const [vulnerableAssets, setVulnerableAssets] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/vulnerable-assets')
+    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/vulnerable-assets')
       .then(res => res.json())
       .then(data => setVulnerableAssets(data))
       .catch(err => console.error("Failed to fetch vulnerable assets:", err));
@@ -24,7 +24,7 @@ const CyberRating = () => {
             <span className="text-tertiary font-bold text-sm uppercase tracking-wider">Elite-PQC</span>
           </div>
           <button 
-            onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/reports/download', '_blank')}
+            onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/reports/download', '_blank')}
             className="bg-surface-container-highest text-on-surface px-6 py-2 rounded-lg text-sm font-semibold hover:bg-surface-variant transition-colors shadow-sm w-full sm:w-auto"
           >
             Export Executive Summary

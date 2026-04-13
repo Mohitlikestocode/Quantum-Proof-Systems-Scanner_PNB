@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 
 const Scanner = () => {
   const [target, setTarget] = useState("");
-  const [scanMode, setScanMode] = useState("Full Deep Scan");
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<any>(null);
   const [showToast, setShowToast] = useState(false);
@@ -11,8 +10,40 @@ const Scanner = () => {
   const [bucketFilter, setBucketFilter] = useState<'all' | 'pqc_ready' | 'standard' | 'critical'>('all');
   const [subdomainQuery, setSubdomainQuery] = useState('');
   const [subdomainPage, setSubdomainPage] = useState(0);
+  const [scheduleFrequency, setScheduleFrequency] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [scheduleTime, setScheduleTime] = useState('02:00');
+  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState('mon');
+  const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState(1);
+  const [scheduleEmail, setScheduleEmail] = useState(localStorage.getItem('userEmail') || 'admin@quantumshield.local');
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('scannerTheme') === 'dark');
+  const [scanMode, setScanMode] = useState<'Full Deep Scan' | 'Quick Scan'>('Full Deep Scan');
   const role = localStorage.getItem('userRole') || 'User';
   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+
+  const mobileApps = useMemo(() => scanResult?.scan_result?.mobile_info?.apps || [], [scanResult]);
+  const topMobileMatch = scanResult?.scan_result?.mobile_info?.most_relevant_app;
+
+  const keyExchangeLabel = useMemo(() => {
+    const kem = scanResult?.scan_result?.pqc_kem_algorithm;
+    if (!kem) return scanResult?.scan_result?.algorithm || '---';
+    if (String(kem).toUpperCase().includes('MLKEM')) {
+      return `${kem} (Kyber Family)`;
+    }
+    return kem;
+  }, [scanResult]);
+
+  const scanPerformance = useMemo(() => {
+    const result = scanResult?.scan_result || {};
+    const responseMs = Number(result?.response_time_ms || 0);
+    const shownDuration = responseMs > 0 ? `${(responseMs / 1000).toFixed(2)}s` : (scanResult ? 'N/A' : '---');
+    const subdomainCount = Number(result?.all_subdomains_detailed?.length || 0);
+    const vulnTargets = Number(result?.vulnerability_scan?.scan_targets || 0);
+    return {
+      duration: shownDuration,
+      payloads: subdomainCount + vulnTargets,
+    };
+  }, [scanResult]);
 
   const subdomainRows = useMemo(() => {
     const rows = scanResult?.scan_result?.all_subdomains_detailed || [];
@@ -49,6 +80,40 @@ const Scanner = () => {
     setSubdomainPage(0);
   }, [scanResult, statusFilter, bucketFilter, subdomainQuery]);
 
+  useEffect(() => {
+    localStorage.setItem('scannerTheme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  const handshakeStatus = useMemo(() => {
+    const discovery = scanResult?.scan_result?.subdomains_discovery;
+    const mainProbe = discovery?.main_domain;
+    const rootProbe = discovery?.main_domain_probe;
+
+    if (!scanResult) {
+      return {
+        label: 'TLS handshake not started',
+        detail: 'Run a scan to probe TLS handshake status',
+        dotClass: 'bg-slate-400',
+      };
+    }
+
+    if (mainProbe?.connection_successful) {
+      const endpoint = mainProbe?.resolved_from || scanResult?.name || 'target host';
+      return {
+        label: 'TLS handshake successful',
+        detail: `Endpoint: ${endpoint}`,
+        dotClass: 'bg-emerald-500',
+      };
+    }
+
+    const errorMsg = mainProbe?.error || rootProbe?.error || 'Handshake failed or timed out';
+    return {
+      label: 'TLS handshake attempted but failed',
+      detail: errorMsg,
+      dotClass: 'bg-red-500',
+    };
+  }, [scanResult]);
+
   const handleScan = async () => {
     if (!target) return;
     setIsScanning(true);
@@ -61,22 +126,72 @@ const Scanner = () => {
         },
         body: JSON.stringify({ domain: target, mode: scanMode })
       });
+
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || `Scan request failed with status ${res.status}`);
+      }
+
       setScanResult(data);
       setToastMsg(`Scan Completed: ${target}`);
       setShowToast(true);
       setTimeout(() => setShowToast(false), 4000);
-    } catch (err) {
-      console.error("Scan failed", err);
-      setToastMsg(`Scan Failed: ${target}`);
+    } catch (err: any) {
+      console.error("Scan request error", err);
+      const errorMessage = err?.message || 'Unable to reach scanner service';
+      setToastMsg(`Unable to complete scan for ${target}: ${errorMessage}`);
       setShowToast(true);
       setTimeout(() => setShowToast(false), 4000);
     } finally {
       setIsScanning(false);
     }
   };
+
+  const handleSchedule = async () => {
+    if (!target.trim()) {
+      setToastMsg('Enter target domain before scheduling scans.');
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 4000);
+      return;
+    }
+
+    setIsScheduling(true);
+    try {
+      const res = await fetch(apiBase + '/api/schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': role,
+        },
+        body: JSON.stringify({
+          frequency: scheduleFrequency,
+          time: scheduleTime,
+          domain: target.trim(),
+          email: scheduleEmail.trim() || 'admin@quantumshield.local',
+          day_of_week: scheduleFrequency === 'weekly' ? scheduleDayOfWeek : null,
+          day_of_month: scheduleFrequency === 'monthly' ? scheduleDayOfMonth : null,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Scheduling failed');
+      }
+
+      const nextRun = data?.next_run_time ? ` Next run: ${data.next_run_time}` : '';
+      setToastMsg(`Auto schedule created for ${target.trim()} (${scheduleFrequency}).${nextRun}`);
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 5000);
+    } catch (err: any) {
+      setToastMsg(`Scheduling failed: ${err?.message || 'Unknown error'}`);
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 5000);
+    } finally {
+      setIsScheduling(false);
+    }
+  };
   return (
-    <main className="md:ml-64 pt-24 pb-12 px-8 min-h-screen">
+    <main className={`md:ml-64 pt-24 pb-12 px-8 min-h-screen scanner-scope ${isDarkMode ? 'scanner-dark' : ''}`}>
       <div className="max-w-6xl mx-auto">
         {/* Page Header */}
         <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
@@ -90,6 +205,15 @@ const Scanner = () => {
             <p className="text-on-surface-variant mt-2 max-w-xl">Initiate comprehensive cryptographic audits to identify legacy algorithms vulnerable to Shor's algorithm and ensure PQC compliance.</p>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsDarkMode((prev) => !prev)}
+              className="h-9 px-3 rounded-md border border-outline-variant/40 bg-surface-container-highest text-on-surface text-xs font-semibold flex items-center gap-1.5 hover:bg-surface-dim transition-all"
+              title="Toggle Scanner Dark Mode"
+              aria-label="Toggle Scanner Dark Mode"
+            >
+              <span className="material-symbols-outlined text-sm">{isDarkMode ? 'light_mode' : 'dark_mode'}</span>
+              {isDarkMode ? 'Light' : 'Dark'}
+            </button>
             <button
               onClick={() => {
                 if (!target.trim()) {
@@ -144,14 +268,13 @@ const Scanner = () => {
                     type="text" 
                   />
                 </div>
-                <select 
+                <select
                   value={scanMode}
-                  onChange={(e) => setScanMode(e.target.value)}
-                  className="bg-surface-container-low border-none rounded-lg py-4 px-6 text-sm font-bold text-on-surface-variant focus:ring-2 focus:ring-primary/20 outline-none cursor-pointer w-full sm:w-auto"
+                  onChange={(e) => setScanMode(e.target.value as 'Full Deep Scan' | 'Quick Scan')}
+                  className="bg-surface-container-low rounded-lg py-4 px-4 text-sm font-bold text-on-surface-variant w-full sm:w-auto border border-outline-variant/20 outline-none focus:ring-1 focus:ring-primary"
                 >
-                  <option>Full Deep Scan</option>
-                  <option>Quick Audit</option>
-                  <option>SSL/TLS Only</option>
+                  <option value="Full Deep Scan">Full Deep Scan</option>
+                  <option value="Quick Scan">Quick Scan</option>
                 </select>
               </div>
             </div>
@@ -163,6 +286,14 @@ const Scanner = () => {
                 <div className="flex items-center gap-2 text-[0.6875rem] font-bold py-1 px-3 bg-tertiary/10 text-tertiary rounded-full uppercase">
                   <span className={`w-1.5 h-1.5 bg-tertiary rounded-full ${isScanning ? 'animate-pulse' : ''}`}></span>
                   {isScanning ? 'Scanning...' : scanResult ? 'Analysis Complete' : 'Waiting for Input'}
+                </div>
+              </div>
+
+              <div className="mb-6 flex items-start gap-2 rounded-lg border border-outline-variant/30 bg-surface-container-low px-3 py-2">
+                <span className={`mt-1 h-2 w-2 rounded-full ${handshakeStatus.dotClass}`}></span>
+                <div>
+                  <p className="text-xs font-semibold text-on-surface">{handshakeStatus.label}</p>
+                  <p className="text-[0.6875rem] text-on-surface-variant break-words">{handshakeStatus.detail}</p>
                 </div>
               </div>
 
@@ -180,12 +311,16 @@ const Scanner = () => {
                   </div>
                 </div>
 
-                {/* Cipher Suite */}
+                {/* Key Exchange / Cipher Suite */}
                 <div className="bg-surface-container-low rounded-lg p-5">
-                  <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-2">Cipher Suite</p>
+                  <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-2">Key Exchange</p>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-xl font-bold text-on-surface">{scanResult?.scan_result?.algorithm || '---'}</span>
-                    <span className="text-[0.625rem] font-bold py-0.5 px-2 bg-tertiary text-white rounded">OPTIMAL</span>
+                    <span className="text-xl font-bold text-on-surface">
+                      {keyExchangeLabel}
+                    </span>
+                    <span className="text-[0.625rem] font-bold py-0.5 px-2 bg-tertiary text-white rounded">
+                      {scanResult?.scan_result?.pqc_status || 'STANDARD'}
+                    </span>
                   </div>
                   <p className="text-[0.65rem] text-on-surface-variant mt-3 font-medium truncate">{scanResult?.scan_result?.cipher_suite || 'Waiting for scan...'}</p>
                 </div>
@@ -275,10 +410,10 @@ const Scanner = () => {
                 <div className="bg-surface-container-low rounded-lg p-5">
                   <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-2">Scan Performance</p>
                   <div className="flex items-baseline justify-between mt-1">
-                    <span className="text-xl font-bold text-on-surface">{isScanning ? '--' : (scanResult ? (scanMode === 'Quick Audit' ? '240ms' : '1.42s') : '---')}</span>
+                    <span className="text-xl font-bold text-on-surface">{isScanning ? '--' : scanPerformance.duration}</span>
                     <span className="text-[0.625rem] font-bold py-0.5 px-2 bg-surface-container-highest text-on-surface rounded uppercase">{scanMode}</span>
                   </div>
-                  <p className="text-[0.65rem] text-on-surface-variant mt-2 border-t border-surface-container-highest pt-2">Payloads Verified: {scanResult ? (scanMode === 'Full Deep Scan' ? '128' : '14') : '0'}</p>
+                  <p className="text-[0.65rem] text-on-surface-variant mt-2 border-t border-surface-container-highest pt-2">Payloads Verified: {scanResult ? scanPerformance.payloads : 0}</p>
                 </div>
                 
                 {/* Smart Risk Explanation (Full Width) */}
@@ -445,6 +580,52 @@ const Scanner = () => {
                   )}
                 </div>
               )}
+
+              {scanResult && (
+                <div className="mt-8 bg-surface-container-low rounded-lg p-5 border border-outline-variant/20">
+                  <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
+                    <div>
+                      <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest">Mobile App Similarity Report</p>
+                      <h4 className="text-sm font-bold text-on-surface mt-1">Apps matching {scanResult?.name || target}</h4>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="px-3 py-2 rounded bg-surface-container-highest">Total: <span className="font-bold">{scanResult?.scan_result?.mobile_info?.mobile_apps_found || 0}</span></div>
+                      <div className="px-3 py-2 rounded bg-surface-container-highest">Top Match: <span className="font-bold">{topMobileMatch?.name || 'N/A'}</span></div>
+                    </div>
+                  </div>
+
+                  {mobileApps.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant">No matching mobile apps found for this domain.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded border border-outline-variant/20">
+                      <table className="w-full text-left text-xs min-w-max">
+                        <thead className="bg-surface-container-highest">
+                          <tr>
+                            <th className="px-3 py-2 text-[10px] uppercase tracking-wider text-on-surface-variant font-bold whitespace-nowrap">Platform</th>
+                            <th className="px-3 py-2 text-[10px] uppercase tracking-wider text-on-surface-variant font-bold whitespace-nowrap">App Name</th>
+                            <th className="px-3 py-2 text-[10px] uppercase tracking-wider text-on-surface-variant font-bold whitespace-nowrap">Relevance</th>
+                            <th className="px-3 py-2 text-[10px] uppercase tracking-wider text-on-surface-variant font-bold whitespace-nowrap">Store Link</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {mobileApps.slice(0, 20).map((app: any, idx: number) => (
+                            <tr key={`${app.platform}-${app.app_id || idx}`} className="border-t border-outline-variant/10 hover:bg-surface-container-highest/50 transition-colors">
+                              <td className="px-3 py-2 text-xs font-medium capitalize">{app.platform || 'unknown'}</td>
+                              <td className="px-3 py-2 text-xs font-medium">{app.name || 'Unknown'}</td>
+                              <td className="px-3 py-2 text-xs font-bold">{typeof app.relevance === 'number' ? `${Math.round(app.relevance * 100)}%` : 'N/A'}</td>
+                              <td className="px-3 py-2 text-xs">
+                                {app.store_url ? (
+                                  <a href={app.store_url} target="_blank" rel="noreferrer" className="text-primary underline">Open</a>
+                                ) : 'N/A'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 
@@ -457,89 +638,139 @@ const Scanner = () => {
                 <h3 className="text-sm font-bold uppercase tracking-wider text-on-surface">Auto Scheduling</h3>
               </div>
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
-                  <span className="text-xs font-bold">Daily Pulse Scan</span>
-                  <div className="w-10 h-5 bg-primary/20 rounded-full relative p-0.5 cursor-pointer">
-                    <div className="h-4 w-4 bg-primary rounded-full absolute right-0.5"></div>
-                  </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[0.65rem] font-bold uppercase tracking-wider text-on-surface-variant mb-1">Frequency</label>
+                  <select
+                    value={scheduleFrequency}
+                    onChange={(e) => setScheduleFrequency(e.target.value as 'daily' | 'weekly' | 'monthly')}
+                    className="w-full bg-surface-container-low border border-outline-variant/20 rounded px-3 py-2 text-xs font-semibold outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
                 </div>
-                <div className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg opacity-60">
-                  <span className="text-xs font-bold">Weekly PQC Deep Audit</span>
-                  <div className="w-10 h-5 bg-slate-300 rounded-full relative p-0.5 cursor-pointer">
-                    <div className="h-4 w-4 bg-white rounded-full absolute left-0.5"></div>
+
+                {scheduleFrequency === 'weekly' && (
+                  <div>
+                    <label className="block text-[0.65rem] font-bold uppercase tracking-wider text-on-surface-variant mb-1">Day of Week</label>
+                    <select
+                      value={scheduleDayOfWeek}
+                      onChange={(e) => setScheduleDayOfWeek(e.target.value)}
+                      className="w-full bg-surface-container-low border border-outline-variant/20 rounded px-3 py-2 text-xs font-semibold outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="mon">Monday</option>
+                      <option value="tue">Tuesday</option>
+                      <option value="wed">Wednesday</option>
+                      <option value="thu">Thursday</option>
+                      <option value="fri">Friday</option>
+                      <option value="sat">Saturday</option>
+                      <option value="sun">Sunday</option>
+                    </select>
                   </div>
+                )}
+
+                {scheduleFrequency === 'monthly' && (
+                  <div>
+                    <label className="block text-[0.65rem] font-bold uppercase tracking-wider text-on-surface-variant mb-1">Day of Month</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={scheduleDayOfMonth}
+                      onChange={(e) => setScheduleDayOfMonth(Math.max(1, Math.min(28, Number(e.target.value) || 1)))}
+                      className="w-full bg-surface-container-low border border-outline-variant/20 rounded px-3 py-2 text-xs font-semibold outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[0.65rem] font-bold uppercase tracking-wider text-on-surface-variant mb-1">Time</label>
+                  <input
+                    type="time"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full bg-surface-container-low border border-outline-variant/20 rounded px-3 py-2 text-xs font-semibold outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[0.65rem] font-bold uppercase tracking-wider text-on-surface-variant mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={scheduleEmail}
+                    onChange={(e) => setScheduleEmail(e.target.value)}
+                    placeholder="abc@gmail.com"
+                    className="w-full bg-surface-container-low border border-outline-variant/20 rounded px-3 py-2 text-xs font-semibold outline-none focus:ring-1 focus:ring-primary"
+                  />
                 </div>
               </div>
 
-              <div className="mt-8 pt-6 border-t border-surface-container-highest/50">
-                <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-4">Upcoming Scans</p>
-                <div className="space-y-3">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full sm:w-auto">
-                    <div className="text-[0.65rem] font-bold bg-surface-container-high px-2 py-1 rounded w-20 flex-shrink-0 text-center">TOMORROW</div>
-                    <div className="flex-1">
-                      <p className="text-xs font-bold leading-none">Internal API Hub</p>
-                      <p className="text-[0.65rem] text-on-surface-variant mt-1">02:00 AM UTC</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full sm:w-auto">
-                    <div className="text-[0.65rem] font-bold bg-surface-container-high px-2 py-1 rounded w-20 flex-shrink-0 text-center">OCT 24</div>
-                    <div className="flex-1">
-                      <p className="text-xs font-bold leading-none">Legacy Mainframe</p>
-                      <p className="text-[0.65rem] text-on-surface-variant mt-1">04:30 AM UTC</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => { alert(`Automated deep scan scheduled for ${target || 'Current Target'} at 02:00 AM UTC.`); }} className="w-full mt-6 py-2.5 bg-gradient-to-br from-primary to-primary-container text-white rounded font-bold text-xs transition-all hover:shadow-lg active:scale-95 flex items-center justify-center gap-2">
+              <button onClick={handleSchedule} disabled={isScheduling} className={`w-full mt-6 py-2.5 bg-gradient-to-br from-primary to-primary-container text-white rounded font-bold text-xs transition-all hover:shadow-lg active:scale-95 flex items-center justify-center gap-2 ${isScheduling ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 <span className="material-symbols-outlined text-[14px]">auto_mode</span>
-                Auto Schedule Scan
+                {isScheduling ? 'Scheduling...' : 'Auto Schedule Scan'}
               </button>
             </div>
 
-            {/* Scan Health / Status */}
-            <div className="bg-surface-container-lowest rounded-xl p-6 shadow-sm overflow-hidden relative">
-              <div className="absolute -top-12 -right-12 w-24 h-24 bg-primary opacity-10 rounded-full blur-2xl"></div>
-              <h3 className="text-sm font-bold uppercase tracking-wider text-on-surface mb-6">Last Run Status</h3>
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-12 h-12 rounded-lg bg-tertiary/10 flex items-center justify-center text-tertiary">
-                  <span className="material-symbols-outlined text-2xl flex items-center" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+            {/* Risk Formula Transparency */}
+            <div className="bg-surface-container-lowest rounded-xl p-6 shadow-sm border border-outline-variant/20">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-on-surface mb-4">Risk Formula Transparency</h3>
+              <div className="space-y-4 text-xs text-on-surface-variant">
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Core Score Formula</p>
+                  <div className="font-mono text-[11px] leading-6 bg-surface-container-highest rounded p-3 border border-outline-variant/20">
+                    <p>Total Penalty = (0.30 x Crypto) + (0.20 x Protocol) + (0.20 x Vulnerability) + (0.10 x Exposure) + (0.10 x Third-Party) + (0.10 x Governance)</p>
+                    <div className="mt-3 flex items-center gap-2 text-on-surface">
+                      <span>Score</span>
+                      <span>=</span>
+                      <div className="inline-flex flex-col items-center min-w-[170px]">
+                        <span className="border-b border-on-surface px-2 text-center">100 - Total Penalty</span>
+                        <span className="px-2 text-center">1</span>
+                      </div>
+                    </div>
+                    <p className="mt-3">Score = max(0, Score)</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-on-surface">Successful Finish</p>
-                  <p className="text-[0.65rem] text-on-surface-variant mt-1">Oct 21, 2023 • 14:32</p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-[0.65rem] font-bold text-on-surface-variant uppercase">
-                  <span>Duration</span>
-                  <span className="text-on-surface">4m 12s</span>
-                </div>
-                <div className="flex items-center justify-between text-[0.65rem] font-bold text-on-surface-variant uppercase">
-                  <span>Nodes Scanned</span>
-                  <span className="text-on-surface">1,240</span>
-                </div>
-                <div className="flex items-center justify-between text-[0.65rem] font-bold text-on-surface-variant uppercase">
-                  <span>Vulnerabilities</span>
-                  <span className="text-on-surface">0</span>
-                </div>
-              </div>
-            </div>
 
-            {/* Entropy/Status Visualization */}
-            <div className="bg-white rounded-xl p-6 shadow-sm flex flex-col items-center">
-              <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-6 w-full">Quantum Entropy Status</p>
-              <div className="relative w-32 h-32 flex items-center justify-center">
-                <svg className="w-full h-full transform -rotate-90">
-                  <circle className="text-surface-container" cx="64" cy="64" fill="transparent" r="58" stroke="currentColor" strokeWidth="8"></circle>
-                  <circle className="text-tertiary transition-all" cx="64" cy="64" fill="transparent" r="58" stroke="currentColor" strokeDasharray="364.4" strokeDashoffset="18.22" strokeWidth="8"></circle>
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-2xl font-extrabold text-on-surface">95%</span>
-                  <span className="text-[0.6rem] font-bold text-on-surface-variant">PURITY</span>
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Crypto Risk Rules</p>
+                  <p>RSA adds +60. ECC/ECDSA adds +30.</p>
+                  <p>RSA key penalties: &lt;2048 adds +40, 2048 adds +20.</p>
+                  <p>ECC key penalties: &lt;224 adds +40, &lt;256 adds +20.</p>
+                </div>
+
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Protocol Risk Rules</p>
+                  <p>If TLS 1.1/1.0 present -&gt; Protocol Risk = 100.</p>
+                  <p>If TLS 1.2 + 1.3 together -&gt; Protocol Risk = 60 (dual compatibility penalty).</p>
+                  <p>If only TLS 1.2 -&gt; Protocol Risk = 50. If only TLS 1.3 -&gt; Protocol Risk = 0.</p>
+                </div>
+
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Risk Bands</p>
+                  <p>Score &gt;= 80: Low (PQC Ready)</p>
+                  <p>60-79: Medium (Quantum Safe)</p>
+                  <p>40-59: High (Needs Upgrade)</p>
+                  <p>&lt;40: Critical (Not Safe)</p>
+                </div>
+
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Classification Math</p>
+                  <div className="font-mono text-[10px] leading-5 bg-surface-container-highest rounded p-3 border border-outline-variant/20 overflow-x-auto">
+                    <div className="flex items-start gap-1 min-w-[300px]">
+                      <span>Improvement%</span>
+                      <span>=</span>
+                      <div className="inline-flex flex-col items-center min-w-[190px]">
+                        <span className="border-b border-on-surface px-2 text-center">(BS - CS) x 100</span>
+                        <span className="px-2 text-center">BS</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] text-on-surface-variant">BS = Baseline Score</p>
+                  <p className="text-[10px] text-on-surface-variant">CS = Current Score</p>
                 </div>
               </div>
-              <p className="text-center text-[0.65rem] font-medium text-on-surface-variant mt-6">Cryptographic hygiene is within optimal operational range.</p>
             </div>
           </aside>
         </div>

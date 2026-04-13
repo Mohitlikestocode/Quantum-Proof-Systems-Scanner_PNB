@@ -40,7 +40,7 @@ export default function Login({ onLogin }: { onLogin: (session: AuthSession) => 
       }
 
       const endpoint = '/api/auth/send-otp';
-      const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + endpoint, {
+      const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, role })
@@ -64,7 +64,7 @@ export default function Login({ onLogin }: { onLogin: (session: AuthSession) => 
       setLoading(true);
       setErrorMsg('');
       try {
-        const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/auth/verify-otp', {
+        const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/auth/verify-otp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, otp: code })

@@ -5,7 +5,9 @@ def calculate_advanced_risk(
     days_to_expiry: int,
     vulnerabilities: list,
     hosting: dict,
-    has_owner: bool = True
+    has_owner: bool = True,
+    pqc_kem_detected: bool = False,
+    pqc_status: str = "None",
 ) -> dict:
     """Mathematical Risk Engine and Classification based on feedback.md."""
     
@@ -34,6 +36,14 @@ def calculate_advanced_risk(
         
     crypto_risk = min(100, crypto_risk)
 
+    # Reward endpoints already negotiating PQC KEMs.
+    pqc_status_upper = (pqc_status or "None").upper()
+    if pqc_kem_detected:
+        if "FULL" in pqc_status_upper:
+            crypto_risk = max(0, crypto_risk - 45)
+        elif "HYBRID" in pqc_status_upper:
+            crypto_risk = max(0, crypto_risk - 35)
+
     # 2. Protocol Risk (max 100)
     protocol_risk = 0
     has_1_3 = any("1.3" in t for t in tls_versions)
@@ -48,6 +58,12 @@ def calculate_advanced_risk(
         protocol_risk = 50
     elif has_1_3:
         protocol_risk = 0
+
+    if pqc_kem_detected:
+        if "FULL" in pqc_status_upper:
+            protocol_risk = max(0, protocol_risk - 20)
+        elif "HYBRID" in pqc_status_upper:
+            protocol_risk = max(0, protocol_risk - 12)
 
     # 3. Vulnerability Risk (max 100)
     vuln_risk = 0
@@ -79,6 +95,13 @@ def calculate_advanced_risk(
     )
     
     score = int(max(0, 100 - total_penalty))
+
+    # PQC-aware floor: if endpoint already negotiates PQC KEM, avoid classifying as overly critical.
+    if pqc_kem_detected:
+        if "FULL" in pqc_status_upper:
+            score = max(score, 72)
+        elif "HYBRID" in pqc_status_upper:
+            score = max(score, 65)
     
     # Certificate expiry overrides
     if days_to_expiry < 0:
@@ -121,6 +144,8 @@ def calculate_advanced_risk(
         "status": status,
         "label": label,
         "category": category,
+        "pqc_status": pqc_status,
+        "pqc_kem_detected": pqc_kem_detected,
         "baseline_score": baseline_score,
         "improvement": improvement,
         "reason": f"Calculated based on 6-factor model. Baseline score: {baseline_score}",

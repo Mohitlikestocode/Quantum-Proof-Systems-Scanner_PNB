@@ -8,10 +8,26 @@ type ReportsOverview = {
   mobile_app?: { summary?: { domains_with_mobile_apps?: number; total_apps?: number; android_apps?: number; ios_apps?: number } };
 };
 
+type ReportHistoryRow = {
+  report_id: string;
+  timestamp: string;
+  domain: string;
+  risk_level: string;
+  score: number;
+  generated_by: string;
+};
+
 const Reports = () => {
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
   const [overview, setOverview] = useState<ReportsOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [historyRows, setHistoryRows] = useState<ReportHistoryRow[]>([]);
+  const [historyFilter, setHistoryFilter] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [reportDomain, setReportDomain] = useState('');
+  const [reportRecipient, setReportRecipient] = useState(localStorage.getItem('userEmail') || '');
+  const [includeHistory, setIncludeHistory] = useState(true);
+  const [sendingReport, setSendingReport] = useState(false);
   const role = localStorage.getItem('userRole') || 'User';
   const canExportPdf = role !== 'User';
   const canExportCiso = role === 'Super Admin';
@@ -47,6 +63,60 @@ const Reports = () => {
     loadOverview();
   }, [apiBase]);
 
+  useEffect(() => {
+    const loadHistory = async () => {
+      setHistoryLoading(true);
+      try {
+        const query = historyFilter.trim() ? `?domain=${encodeURIComponent(historyFilter.trim())}` : '';
+        const response = await fetch(`${apiBase}/api/reports/history${query}`);
+        if (!response.ok) {
+          throw new Error('Failed to load report history');
+        }
+        const data = await response.json();
+        setHistoryRows(data?.data || []);
+      } catch (error) {
+        console.error('Unable to load report history', error);
+        setHistoryRows([]);
+      } finally {
+        setHistoryLoading(false);
+      }
+    };
+
+    loadHistory();
+  }, [apiBase, historyFilter]);
+
+  const handleSendDomainReport = async () => {
+    if (!reportDomain.trim() || !reportRecipient.trim()) {
+      alert('Enter both company domain and recipient email.');
+      return;
+    }
+
+    setSendingReport(true);
+    try {
+      const response = await fetch(`${apiBase}/api/reports/company/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: reportDomain.trim(),
+          recipient: reportRecipient.trim(),
+          include_history: includeHistory,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.detail || 'Failed to send company report email');
+      }
+
+      alert(data?.message || 'Report sent successfully.');
+      setHistoryFilter(reportDomain.trim());
+    } catch (error: any) {
+      alert(error?.message || 'Failed to send report.');
+    } finally {
+      setSendingReport(false);
+    }
+  };
+
   const summary = useMemo(() => {
     const totalDomains = overview?.asset_discovery?.summary?.total_domains ?? 0;
     const activeDomains = overview?.asset_discovery?.summary?.active_domains ?? 0;
@@ -76,9 +146,9 @@ const Reports = () => {
             <p className="text-on-surface-variant max-w-xl">Comprehensive analytical oversight of your organization's transition to post-quantum cryptographic standards.</p>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={() => alert("Redirecting to AI Scheduler...")} className="flex items-center gap-2 px-4 py-2.5 bg-surface-container-lowest text-on-surface border border-outline-variant/20 rounded-lg hover:bg-surface-container-low transition-colors shadow-sm font-medium text-sm w-full sm:w-auto">
+            <button onClick={() => setHistoryFilter(reportDomain.trim() || historyFilter)} className="flex items-center gap-2 px-4 py-2.5 bg-surface-container-lowest text-on-surface border border-outline-variant/20 rounded-lg hover:bg-surface-container-low transition-colors shadow-sm font-medium text-sm w-full sm:w-auto">
               <span className="material-symbols-outlined text-lg" data-icon="calendar_month">calendar_month</span>
-              Schedule
+              Refresh History
             </button>
             <button
               onClick={() => {
@@ -165,108 +235,88 @@ const Reports = () => {
                 <div className="rounded-md bg-surface-container-low px-3 py-2 text-on-surface-variant">Mobile Apps: <span className="font-bold text-on-surface">{summary.mobileApps}</span></div>
               </div>
               <div className="space-y-3">
-                <button onClick={() => openJsonReport('/api/reports/asset-discovery')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary" data-icon="search_check">search_check</span>
-                    <span className="text-sm font-medium">1. Asset Discovery (JSON)</span>
+                <div className="p-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-primary" data-icon="search_check">search_check</span>
+                      <span className="text-sm font-medium">1. Asset Discovery</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openJsonReport('/api/reports/asset-discovery')} className="px-3 py-1.5 text-xs font-bold rounded-md border border-outline-variant/30 hover:bg-surface-container-low transition-colors">JSON</button>
+                      <button onClick={() => openPdfReport('/api/reports/asset-discovery/download')} className="px-3 py-1.5 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors">PDF</button>
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openPdfReport('/api/reports/asset-discovery/download')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary" data-icon="picture_as_pdf">picture_as_pdf</span>
-                    <span className="text-sm font-medium">1. Asset Discovery (PDF)</span>
+                </div>
+
+                <div className="p-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-tertiary" data-icon="lan">lan</span>
+                      <span className="text-sm font-medium">2. Subdomain Risk</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openJsonReport('/api/reports/subdomain-risk')} className="px-3 py-1.5 text-xs font-bold rounded-md border border-outline-variant/30 hover:bg-surface-container-low transition-colors">JSON</button>
+                      <button onClick={() => openPdfReport('/api/reports/subdomain-risk/download')} className="px-3 py-1.5 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors">PDF</button>
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openJsonReport('/api/reports/subdomain-risk')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-tertiary" data-icon="lan">lan</span>
-                    <span className="text-sm font-medium">2. Subdomain Risk (JSON)</span>
+                </div>
+
+                <div className="p-3 rounded-lg border border-error/30 bg-error/5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-error" data-icon="manage_search">manage_search</span>
+                      <span className="text-sm font-medium text-error font-bold">3. Vulnerability Report</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openJsonReport('/api/reports/vulnerability')} className="px-3 py-1.5 text-xs font-bold rounded-md border border-error/30 text-error hover:bg-error/10 transition-colors">JSON</button>
+                      <button onClick={() => openPdfReport('/api/reports/vulnerability/download')} className="px-3 py-1.5 text-xs font-bold rounded-md bg-error text-white hover:bg-error/90 transition-colors">PDF</button>
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openPdfReport('/api/reports/subdomain-risk/download')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-tertiary" data-icon="picture_as_pdf">picture_as_pdf</span>
-                    <span className="text-sm font-medium">2. Subdomain Risk (PDF)</span>
+                </div>
+
+                <div className="p-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-secondary" data-icon="smartphone">smartphone</span>
+                      <span className="text-sm font-medium">4. Mobile App Report</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openJsonReport('/api/reports/mobile-app')} className="px-3 py-1.5 text-xs font-bold rounded-md border border-outline-variant/30 hover:bg-surface-container-low transition-colors">JSON</button>
+                      <button onClick={() => openPdfReport('/api/reports/mobile-app/download')} className="px-3 py-1.5 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors">PDF</button>
+                    </div>
                   </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openJsonReport('/api/reports/vulnerability')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-error/30 transition-all group bg-error/5">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-error" data-icon="manage_search">manage_search</span>
-                    <span className="text-sm font-medium text-error font-bold">3. Vulnerability Report (JSON)</span>
-                  </div>
-                  <span className="material-symbols-outlined text-error opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openPdfReport('/api/reports/vulnerability/download')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-error/30 transition-all group bg-error/5">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-error" data-icon="picture_as_pdf">picture_as_pdf</span>
-                    <span className="text-sm font-medium text-error font-bold">3. Vulnerability Report (PDF)</span>
-                  </div>
-                  <span className="material-symbols-outlined text-error opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openJsonReport('/api/reports/mobile-app')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-secondary" data-icon="smartphone">smartphone</span>
-                    <span className="text-sm font-medium">4. Mobile App Report (JSON)</span>
-                  </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
-                <button onClick={() => openPdfReport('/api/reports/mobile-app/download')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low border border-transparent hover:border-outline-variant/20 transition-all group">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-secondary" data-icon="picture_as_pdf">picture_as_pdf</span>
-                    <span className="text-sm font-medium">4. Mobile App Report (PDF)</span>
-                  </div>
-                  <span className="material-symbols-outlined text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity" data-icon="download">download</span>
-                </button>
+                </div>
               </div>
             </div>
 
-            {/* Scheduling */}
+            {/* Company Report Email */}
             <div className="bg-surface-container-lowest p-6 rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-outline-variant/10">
-              <h3 className="text-sm font-bold text-on-surface mb-6 uppercase tracking-wider">Automated Scheduling</h3>
-              <div className="flex flex-col gap-4">
-                <label className="flex items-center gap-4 cursor-pointer group">
-                  <div className="relative">
-                    <input defaultChecked className="peer hidden" name="sched" type="radio" />
-                    <div className="w-5 h-5 rounded-full border-2 border-outline peer-checked:border-primary peer-checked:bg-primary transition-all"></div>
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 peer-checked:opacity-100 text-[10px] text-white">
-                      <span className="material-symbols-outlined text-[12px] font-bold" data-icon="check">check</span>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">Daily Digest</p>
-                    <p className="text-xs text-on-surface-variant">Every morning at 08:00 AM UTC</p>
-                  </div>
+              <h3 className="text-sm font-bold text-on-surface mb-6 uppercase tracking-wider">Company Report Email</h3>
+              <div className="space-y-3">
+                <input
+                  value={reportDomain}
+                  onChange={(e) => setReportDomain(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-md bg-surface-container-low border border-outline-variant/25"
+                  placeholder="Company domain, e.g. google.com"
+                />
+                <input
+                  type="email"
+                  value={reportRecipient}
+                  onChange={(e) => setReportRecipient(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-md bg-surface-container-low border border-outline-variant/25"
+                  placeholder="Recipient email"
+                />
+                <label className="flex items-center gap-2 text-xs text-on-surface-variant">
+                  <input type="checkbox" checked={includeHistory} onChange={(e) => setIncludeHistory(e.target.checked)} />
+                  Include historical scans for this company
                 </label>
-                <label className="flex items-center gap-4 cursor-pointer group">
-                  <div className="relative">
-                    <input className="peer hidden" name="sched" type="radio" />
-                    <div className="w-5 h-5 rounded-full border-2 border-outline peer-checked:border-primary peer-checked:bg-primary transition-all"></div>
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 peer-checked:opacity-100 text-[10px] text-white">
-                      <span className="material-symbols-outlined text-[12px] font-bold" data-icon="check">check</span>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">Weekly Review</p>
-                    <p className="text-xs text-on-surface-variant">Mondays at 00:00 AM UTC</p>
-                  </div>
-                </label>
-                <label className="flex items-center gap-4 cursor-pointer group">
-                  <div className="relative">
-                    <input className="peer hidden" name="sched" type="radio" />
-                    <div className="w-5 h-5 rounded-full border-2 border-outline peer-checked:border-primary peer-checked:bg-primary transition-all"></div>
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 peer-checked:opacity-100 text-[10px] text-white">
-                      <span className="material-symbols-outlined text-[12px] font-bold" data-icon="check">check</span>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">Custom Interval</p>
-                    <p className="text-xs text-on-surface-variant">Configure frequency and time</p>
-                  </div>
-                </label>
+                <button
+                  onClick={handleSendDomainReport}
+                  disabled={sendingReport}
+                  className={`w-full py-2 text-xs font-bold rounded-md text-white bg-gradient-to-br from-primary to-primary-container ${sendingReport ? 'opacity-60 cursor-not-allowed' : ''}`}
+                >
+                  {sendingReport ? 'Sending...' : 'Send Domain Report'}
+                </button>
               </div>
             </div>
           </section>
@@ -277,7 +327,7 @@ const Reports = () => {
               <div className="px-8 py-6 border-b border-surface-container-low flex items-center justify-between">
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Historical Audit Logs</h3>
                 <div className="flex items-center gap-2">
-                  <input className="px-4 py-1.5 text-xs bg-surface-container-low border-none rounded-lg focus:ring-1 focus:ring-primary w-64 outline-none w-full sm:w-64" placeholder="Filter by date or ID..." type="text" />
+                  <input value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value)} className="px-4 py-1.5 text-xs bg-surface-container-low border-none rounded-lg focus:ring-1 focus:ring-primary w-64 outline-none w-full sm:w-64" placeholder="Filter by domain..." type="text" />
                   <button className="p-1.5 hover:bg-surface-container-low rounded transition-colors">
                     <span className="material-symbols-outlined text-on-surface-variant" data-icon="filter_list">filter_list</span>
                   </button>
@@ -295,89 +345,42 @@ const Reports = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-container-low">
-                    <tr className="hover:bg-surface-container-low transition-colors group">
-                      <td className="px-8 py-4 text-xs font-mono font-bold text-primary">#RP-2023-0492</td>
-                      <td className="px-8 py-4 text-sm text-on-surface-variant">Oct 24, 2023 14:22</td>
-                      <td className="px-8 py-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                            <div className="h-full bg-tertiary w-[98%]"></div>
-                          </div>
-                          <span className="text-xs font-bold text-tertiary">98%</span>
-                        </div>
-                      </td>
-                      <td className="px-8 py-4 text-sm font-medium">System (Auto)</td>
-                      <td className="px-8 py-4 text-right">
-                        <button className="text-on-surface-variant hover:text-primary transition-colors w-full sm:w-auto">
-                          <span className="material-symbols-outlined" data-icon="visibility">visibility</span>
-                        </button>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-surface-container-low transition-colors group">
-                      <td className="px-8 py-4 text-xs font-mono font-bold text-primary">#RP-2023-0491</td>
-                      <td className="px-8 py-4 text-sm text-on-surface-variant">Oct 23, 2023 14:21</td>
-                      <td className="px-8 py-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                            <div className="h-full bg-tertiary w-[97%]"></div>
-                          </div>
-                          <span className="text-xs font-bold text-tertiary">97%</span>
-                        </div>
-                      </td>
-                      <td className="px-8 py-4 text-sm font-medium">Admin (j.doe)</td>
-                      <td className="px-8 py-4 text-right">
-                        <button className="text-on-surface-variant hover:text-primary transition-colors w-full sm:w-auto">
-                          <span className="material-symbols-outlined" data-icon="visibility">visibility</span>
-                        </button>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-surface-container-low transition-colors group">
-                      <td className="px-8 py-4 text-xs font-mono font-bold text-primary">#RP-2023-0490</td>
-                      <td className="px-8 py-4 text-sm text-on-surface-variant">Oct 22, 2023 14:20</td>
-                      <td className="px-8 py-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                            <div className="h-full bg-secondary w-[85%]"></div>
-                          </div>
-                          <span className="text-xs font-bold text-secondary">85%</span>
-                        </div>
-                      </td>
-                      <td className="px-8 py-4 text-sm font-medium">System (Auto)</td>
-                      <td className="px-8 py-4 text-right">
-                        <button className="text-on-surface-variant hover:text-primary transition-colors w-full sm:w-auto">
-                          <span className="material-symbols-outlined" data-icon="visibility">visibility</span>
-                        </button>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-surface-container-low transition-colors group">
-                      <td className="px-8 py-4 text-xs font-mono font-bold text-primary">#RP-2023-0489</td>
-                      <td className="px-8 py-4 text-sm text-on-surface-variant">Oct 21, 2023 14:22</td>
-                      <td className="px-8 py-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                            <div className="h-full bg-error w-[62%]"></div>
-                          </div>
-                          <span className="text-xs font-bold text-error">62%</span>
-                        </div>
-                      </td>
-                      <td className="px-8 py-4 text-sm font-medium">System (Auto)</td>
-                      <td className="px-8 py-4 text-right">
-                        <button className="text-on-surface-variant hover:text-primary transition-colors w-full sm:w-auto">
-                          <span className="material-symbols-outlined" data-icon="visibility">visibility</span>
-                        </button>
-                      </td>
-                    </tr>
+                    {historyLoading ? (
+                      <tr><td className="px-8 py-4 text-sm text-on-surface-variant" colSpan={5}>Loading history...</td></tr>
+                    ) : historyRows.length === 0 ? (
+                      <tr><td className="px-8 py-4 text-sm text-on-surface-variant" colSpan={5}>No history found.</td></tr>
+                    ) : historyRows.map((row) => {
+                      const safeScore = Math.max(0, Math.min(100, Number(row.score || 0)));
+                      const riskLower = String(row.risk_level || '').toLowerCase();
+                      const color = riskLower.includes('high') || riskLower.includes('critical') ? 'bg-error text-error' : riskLower.includes('medium') ? 'bg-secondary text-secondary' : 'bg-tertiary text-tertiary';
+                      return (
+                        <tr key={`${row.report_id}-${row.timestamp}`} className="hover:bg-surface-container-low transition-colors group">
+                          <td className="px-8 py-4 text-xs font-mono font-bold text-primary">{row.report_id}</td>
+                          <td className="px-8 py-4 text-sm text-on-surface-variant">{row.timestamp ? new Date(row.timestamp).toLocaleString() : 'N/A'}</td>
+                          <td className="px-8 py-4">
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
+                                <div className={`h-full ${color.split(' ')[0]}`} style={{ width: `${safeScore}%` }}></div>
+                              </div>
+                              <span className={`text-xs font-bold ${color.split(' ')[1]}`}>{safeScore}%</span>
+                            </div>
+                          </td>
+                          <td className="px-8 py-4 text-sm font-medium">{row.generated_by || 'System'} - {row.domain}</td>
+                          <td className="px-8 py-4 text-right">
+                            <button onClick={() => openJsonReport(`/api/reports/website?domain=${encodeURIComponent(row.domain)}`)} className="text-on-surface-variant hover:text-primary transition-colors w-full sm:w-auto">
+                              <span className="material-symbols-outlined" data-icon="visibility">visibility</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
               <div className="px-8 py-4 bg-surface-container-low/30 flex items-center justify-between">
-                <span className="text-xs text-on-surface-variant font-medium">Showing 4 of 480 reports</span>
+                <span className="text-xs text-on-surface-variant font-medium">Showing {historyRows.length} report rows</span>
                 <div className="flex items-center gap-1">
-                  <button className="px-3 py-1 text-xs font-bold text-on-surface bg-surface-container-lowest border border-outline-variant/20 rounded w-full sm:w-auto">Prev</button>
-                  <button className="px-3 py-1 text-xs font-bold text-white bg-primary rounded w-full sm:w-auto">1</button>
-                  <button className="px-3 py-1 text-xs font-bold text-on-surface hover:bg-surface-container-highest rounded transition-colors w-full sm:w-auto">2</button>
-                  <button className="px-3 py-1 text-xs font-bold text-on-surface hover:bg-surface-container-highest rounded transition-colors w-full sm:w-auto">3</button>
-                  <button className="px-3 py-1 text-xs font-bold text-on-surface bg-surface-container-lowest border border-outline-variant/20 rounded w-full sm:w-auto">Next</button>
+                  <button onClick={() => setHistoryFilter('')} className="px-3 py-1 text-xs font-bold text-on-surface bg-surface-container-lowest border border-outline-variant/20 rounded w-full sm:w-auto">Clear Filter</button>
                 </div>
               </div>
             </div>

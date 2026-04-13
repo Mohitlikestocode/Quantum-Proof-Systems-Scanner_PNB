@@ -25,4 +25,81 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  .scanner-scope.scanner-dark {
+    background:
+      radial-gradient(1100px 420px at 8% -20%, rgba(56, 189, 248, 0.22), transparent 55%),
+      radial-gradient(900px 380px at 100% -10%, rgba(99, 102, 241, 0.20), transparent 52%),
+      linear-gradient(160deg, #0b1220 0%, #0f172a 42%, #111827 100%);
+  }
+
+  .scanner-scope.scanner-dark .bg-surface-container-lowest {
+    background-color: rgba(17, 24, 39, 0.88) !important;
+    border: 1px solid rgba(148, 163, 184, 0.14) !important;
+    box-shadow: 0 14px 40px rgba(2, 6, 23, 0.42) !important;
+  }
+
+  .scanner-scope.scanner-dark .bg-surface-container-low,
+  .scanner-scope.scanner-dark .bg-surface-container,
+  .scanner-scope.scanner-dark .bg-surface-container-high,
+  .scanner-scope.scanner-dark .bg-surface-container-highest {
+    background-color: rgba(30, 41, 59, 0.74) !important;
+  }
+
+  .scanner-scope.scanner-dark .bg-surface-dim {
+    background-color: #334155 !important;
+  }
+
+  .scanner-scope.scanner-dark .text-on-surface,
+  .scanner-scope.scanner-dark .text-on-secondary-container,
+  .scanner-scope.scanner-dark .text-on-primary-container {
+    color: #eaf2ff !important;
+  }
+
+  .scanner-scope.scanner-dark .text-on-surface-variant {
+    color: #c2cfdf !important;
+  }
+
+  .scanner-scope.scanner-dark .text-primary {
+    color: #7dd3fc !important;
+  }
+
+  .scanner-scope.scanner-dark .text-tertiary {
+    color: #34d399 !important;
+  }
+
+  .scanner-scope.scanner-dark .border-outline-variant,
+  .scanner-scope.scanner-dark .border-outline-variant\/20,
+  .scanner-scope.scanner-dark .border-outline-variant\/30,
+  .scanner-scope.scanner-dark .border-outline-variant\/40 {
+    border-color: rgba(148, 163, 184, 0.35) !important;
+  }
+
+  .scanner-scope.scanner-dark .bg-tertiary,
+  .scanner-scope.scanner-dark .bg-tertiary\/10 {
+    background-color: rgba(52, 211, 153, 0.22) !important;
+  }
+
+  .scanner-scope.scanner-dark .bg-primary\/10 {
+    background-color: rgba(56, 189, 248, 0.2) !important;
+  }
+
+  .scanner-scope.scanner-dark input,
+  .scanner-scope.scanner-dark select,
+  .scanner-scope.scanner-dark textarea {
+    color: #eaf2ff !important;
+    background-color: rgba(30, 41, 59, 0.8) !important;
+    border-color: rgba(148, 163, 184, 0.35) !important;
+  }
+
+  .scanner-scope.scanner-dark input::placeholder,
+  .scanner-scope.scanner-dark textarea::placeholder {
+    color: #9db0c7 !important;
+  }
+
+  .scanner-scope.scanner-dark table,
+  .scanner-scope.scanner-dark th,
+  .scanner-scope.scanner-dark td {
+    color: #dbe6f5 !important;
+  }
 }

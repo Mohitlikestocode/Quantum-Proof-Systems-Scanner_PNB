@@ -4,7 +4,7 @@ const Cbom = () => {
   const [cbomData, setCbomData] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/cbom')
+    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/cbom')
       .then(res => res.json())
       .then(data => setCbomData(data))
       .catch(err => console.error("Failed to fetch CBOM", err));
@@ -23,7 +23,7 @@ const Cbom = () => {
           <p className="text-on-surface-variant mt-1 text-sm max-w-2xl">Detailed inventory of cryptographic assets, quantum-safe readiness, and certificate hierarchies across the enterprise network.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-          <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/reports/download')} className="px-4 py-2 bg-surface-container-highest text-on-surface text-sm font-semibold rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 w-full sm:w-auto">
+          <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/reports/download')} className="px-4 py-2 bg-surface-container-highest text-on-surface text-sm font-semibold rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 w-full sm:w-auto">
             <span className="material-symbols-outlined text-[18px]">download</span> Export CBOM
           </button>
           <button onClick={() => alert("Asset Registration Flow initiated in new window")} className="px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-white text-sm font-semibold rounded-lg shadow-sm flex items-center gap-2 w-full sm:w-auto">

@@ -4,6 +4,12 @@ import datetime
 import dateparser
 import uuid
 
+from ..database import db_assets, db_nodes
+from .scanner import scan_target
+from .risk_engine import calculate_advanced_risk
+from .report_generator import generate_pdf_report
+from .chatbot import send_email, summarize_report
+
 # Initialize scheduler
 scheduler = BackgroundScheduler()
 
@@ -18,21 +24,20 @@ def _execute_scheduled_scan(domain: str, email: str = "admin@quantumshield.local
     Runs the scan, generates the report, and emails it.
     """
     try:
-        from main import scan_target, calculate_risk, get_all_assets_list, db_assets, db_nodes
-        from engines.report_generator import generate_pdf_report
-        from engines.chatbot import send_email, summarize_report
-
         print(f"Executing scheduled scan for {domain}...")
         
-        # 1. Run actual/mock scan
+        # 1. Run scan
         scan_data = scan_target(domain)
         
         # 2. Compute risk grading
-        risk_data = calculate_risk(
-            scan_data["tls_version"],
+        tls_versions = scan_data.get("tls_versions_list") or [scan_data.get("tls_version", "TLS 1.2")]
+        risk_data = calculate_advanced_risk(
+            tls_versions,
             scan_data["algorithm"],
             scan_data["key_size"],
-            scan_data["days_to_expiry"]
+            scan_data["days_to_expiry"],
+            scan_data.get("vulnerabilities", []),
+            scan_data.get("hosting", {"type": "internal"}),
         )
         
         # 3. Create or Update Asset Record
@@ -42,19 +47,24 @@ def _execute_scheduled_scan(domain: str, email: str = "admin@quantumshield.local
             "type": "Domain",
             "name": domain,
             "detection_date": datetime.datetime.now().isoformat(),
-            "status": "new",
+            "status": "active",
             "vendor": "Scanned Endpoint",
             "region": "Dynamic",
             "ip_address": scan_data.get("ipv4", "Resolving..."),
             "risk": risk_data,
             "scan_result": scan_data,
+            "vulnerabilities": scan_data.get("vulnerabilities", []),
+            "hosting": scan_data.get("hosting", {"provider": "Unknown", "type": "internal"}),
+            "mobile_apps": scan_data.get("mobile_info", {}).get("apps", []),
+            "subdomains": scan_data.get("subdomains_info", {}).get("subdomains", []),
+            "is_active": True,
             "metadata": {"source": "scheduled_scan"}
         }
         db_assets[asset_id] = new_asset
         db_nodes.append({"id": domain, "type": "Domain", "risk": risk_data["risk_level"]})
 
         # 4. Generate Report Data
-        all_assets = get_all_assets_list()
+        all_assets = list(db_assets.values())
         vulnerable_assets = [a for a in all_assets if a.get("risk", {}).get("risk_level") in ["High", "Medium"]]
         
         report_data = {
@@ -79,7 +89,14 @@ def _execute_scheduled_scan(domain: str, email: str = "admin@quantumshield.local
         print(f"Scheduled scan error: {e}")
 
 
-def schedule_scan_job(frequency: str, time_str: str, domain: str = "auto_discovery", email: str = "admin@quantumshield.local"):
+def schedule_scan_job(
+    frequency: str,
+    time_str: str,
+    domain: str = "auto_discovery",
+    email: str = "admin@quantumshield.local",
+    day_of_week: str = "mon",
+    day_of_month: int = 1,
+):
     """
     Parses natural language frequency and time to schedule a cron job.
     """
@@ -88,15 +105,17 @@ def schedule_scan_job(frequency: str, time_str: str, domain: str = "auto_discove
     hour = parsed_time.hour if parsed_time else 0
     minute = parsed_time.minute if parsed_time else 0
     
-    if frequency == "daily":
+    normalized_frequency = (frequency or "daily").lower()
+    if normalized_frequency == "daily":
         trigger = CronTrigger(hour=hour, minute=minute)
-    elif frequency == "weekly":
-        # Every Monday at specified time
-        trigger = CronTrigger(day_of_week='mon', hour=hour, minute=minute)
-    elif frequency == "hourly":
+    elif normalized_frequency == "weekly":
+        trigger = CronTrigger(day_of_week=(day_of_week or "mon"), hour=hour, minute=minute)
+    elif normalized_frequency == "monthly":
+        normalized_day = max(1, min(28, int(day_of_month or 1)))
+        trigger = CronTrigger(day=normalized_day, hour=hour, minute=minute)
+    elif normalized_frequency == "hourly":
         trigger = CronTrigger(minute=minute)
     else:
-        # Default fallback
         trigger = CronTrigger(hour=hour, minute=minute)
         
     job = scheduler.add_job(
@@ -106,10 +125,14 @@ def schedule_scan_job(frequency: str, time_str: str, domain: str = "auto_discove
         replace_existing=False
     )
     
+    next_run_time = getattr(job, "next_run_time", None)
+
     return {
         "job_id": job.id,
-        "next_run_time": str(job.next_run_time),
+        "next_run_time": str(next_run_time) if next_run_time else "pending",
         "domain": domain,
-        "frequency": frequency,
-        "time": f"{hour:02d}:{minute:02d}"
+        "frequency": normalized_frequency,
+        "time": f"{hour:02d}:{minute:02d}",
+        "day_of_week": day_of_week,
+        "day_of_month": day_of_month,
     }

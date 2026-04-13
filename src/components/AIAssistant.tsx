@@ -21,7 +21,7 @@ const AIAssistant = () => {
     setIsTyping(true);
 
     try {
-      const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/chat', {
+      const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg })

@@ -10,12 +10,12 @@ const AssetInventory = () => {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/assets')
+    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/assets')
       .then(res => res.json())
       .then(data => setAssets(data))
       .catch(err => console.error("Failed to fetch assets", err));
 
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/graph')
+    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/graph')
       .then(res => res.json())
       .then(data => {
         // Need to format links for force graph (source/target)
@@ -129,7 +129,7 @@ const AssetInventory = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/api/reports/download')} className="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-surface-variant transition-colors border border-outline-variant/20 w-full sm:w-auto">
+            <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/reports/download')} className="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-surface-variant transition-colors border border-outline-variant/20 w-full sm:w-auto">
               <span className="material-symbols-outlined text-sm" data-icon="file_download">file_download</span>
               Export
             </button>

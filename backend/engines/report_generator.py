@@ -86,6 +86,8 @@ def _build_bar_chart(title, labels, values, fill_color="#0050cb"):
 def _build_pie_chart(labels, values, slice_colors):
     if not labels or not values:
         return None
+    if sum(values) <= 0:
+        return None
 
     drawing = Drawing(500, 220)
     pie = Pie()

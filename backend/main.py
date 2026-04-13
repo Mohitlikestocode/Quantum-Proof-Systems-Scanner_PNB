@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Literal
 import asyncio
 import datetime
 import uuid
@@ -24,6 +24,35 @@ from .engines.report_generator import generate_pdf_report
 
 def get_all_assets_list():
     return list(db_assets.values())
+
+
+def _normalize_domain(domain: str) -> str:
+    return (domain or "").strip().lower().replace("http://", "").replace("https://", "").split("/")[0]
+
+
+def _parse_iso_datetime(value: str) -> datetime.datetime:
+    try:
+        return datetime.datetime.fromisoformat(value)
+    except Exception:
+        return datetime.datetime.min
+
+
+def _get_assets_for_domain(domain: str) -> List[dict]:
+    normalized = _normalize_domain(domain)
+    matches = [
+        asset for asset in get_all_assets_list()
+        if _normalize_domain(str(asset.get("name", ""))) == normalized
+    ]
+    return sorted(matches, key=lambda item: _parse_iso_datetime(item.get("detection_date", "")), reverse=True)
+
+
+def _build_mobile_rows_from_assets(assets: List[dict]) -> List[dict]:
+    rows: List[dict] = []
+    for asset in assets:
+        apps = asset.get("mobile_apps") or asset.get("scan_result", {}).get("mobile_info", {}).get("apps", [])
+        if apps:
+            rows.append({"domain": asset.get("name"), "apps": apps})
+    return rows
 
 
 app = FastAPI(title="Quantum-Proof Systems Scanner API")
@@ -67,6 +96,15 @@ class ScanRequest(BaseModel):
     domain: str
     mode: Optional[str] = "Full Deep Scan"
 
+
+class ScheduleRequest(BaseModel):
+    domain: str
+    email: str
+    frequency: Literal["daily", "weekly", "monthly"]
+    time: str
+    day_of_week: Optional[str] = None
+    day_of_month: Optional[int] = None
+
 from fastapi import Header
 from .engines.risk_engine import calculate_advanced_risk
 
@@ -76,7 +114,7 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_rol
     domain = request.domain
     
     # 1. Run full discovery scan
-    scan_data = scan_target(domain)
+    scan_data = scan_target(domain, mode=request.mode or "Full Deep Scan")
     
     # Normalize scan fields to avoid runtime failures when handshake fails/inactive targets
     normalized_tls_versions = scan_data.get("tls_versions_list") or []
@@ -102,13 +140,11 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_rol
         normalized_key_size,
         normalized_days_to_expiry,
         scan_data.get("vulnerabilities", []),
-        scan_data.get("hosting", {"type": "internal"})
+        scan_data.get("hosting", {"type": "internal"}),
+        pqc_kem_detected=scan_data.get("pqc_kem_detected", False),
+        pqc_status=scan_data.get("pqc_status", "None"),
     )
     
-    normalized_cipher_suite = scan_data.get("cipher_suite") or "Unknown"
-    normalized_certificate_issuer = scan_data.get("certificate_issuer") or "Unknown"
-    normalized_expiry_date = scan_data.get("expiry_date") or datetime.datetime.now().strftime("%Y-%m-%d")
-
     # 3. Create or Update Asset Record
     asset_id = str(uuid.uuid4())
     new_asset = {
@@ -123,16 +159,32 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_rol
         "risk": risk_data,
         "scan_result": {
             **scan_data,
-            "tls_version": ", ".join(normalized_tls_versions),
-            "tls_versions_list": normalized_tls_versions,
-            "cipher_suite": normalized_cipher_suite,
-            "key_size": normalized_key_size,
-            "certificate_issuer": normalized_certificate_issuer,
-            "expiry_date": normalized_expiry_date,
-            "algorithm": normalized_algorithm,
-            "days_to_expiry": normalized_days_to_expiry,
+            "tls_version": scan_data.get("tls_version") or "Unknown",
+            "tls_versions_list": scan_data.get("tls_versions_list") or [],
+            "cipher_suite": scan_data.get("cipher_suite") or "Unknown",
+            "key_size": scan_data.get("key_size"),
+            "certificate_issuer": scan_data.get("certificate_issuer") or "Unavailable",
+            "expiry_date": scan_data.get("expiry_date"),
+            "algorithm": scan_data.get("algorithm") or "Unavailable",
+            "days_to_expiry": scan_data.get("days_to_expiry"),
+            "certificate_signature_oid": scan_data.get("certificate_signature_oid"),
+            "certificate_signature_algorithm": scan_data.get("certificate_signature_algorithm"),
+            "pqc_kem_detected": scan_data.get("pqc_kem_detected", False),
+            "pqc_kem_algorithm": scan_data.get("pqc_kem_algorithm"),
+            "pqc_kem_group_id": scan_data.get("pqc_kem_group_id"),
+            "pqc_signature_detected": scan_data.get("pqc_signature_detected", False),
+            "pqc_signature_algorithm": scan_data.get("pqc_signature_algorithm"),
+            "pqc_hybrid": scan_data.get("pqc_hybrid", False),
+            "pqc_status": scan_data.get("pqc_status", "None"),
+            "pqc_detection_notes": scan_data.get("pqc_detection_notes", []),
             "ipv4": scan_data.get("ipv4") or "0.0.0.0",
-            "ipv6": scan_data.get("ipv6") or "::"
+            "ipv6": scan_data.get("ipv6") or "::",
+            "risk_input": {
+                "tls_versions": normalized_tls_versions,
+                "algorithm": normalized_algorithm,
+                "key_size": normalized_key_size,
+                "days_to_expiry": normalized_days_to_expiry,
+            },
         },
         "vulnerabilities": scan_data.get("vulnerabilities", []),
         "hosting": scan_data.get("hosting", {"provider": "Unknown", "type": "internal"}),
@@ -148,6 +200,34 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_rol
     db_nodes.append({"id": domain, "type": "Domain", "risk": risk_data["risk_level"]})
     
     return new_asset
+
+
+@app.post("/api/schedule")
+def schedule_scan(request: ScheduleRequest):
+    """Create a recurring scan job from the Scanner scheduling form."""
+    day_of_week = (request.day_of_week or "mon").lower()[:3]
+    day_of_month = request.day_of_month if request.day_of_month is not None else 1
+
+    if request.frequency == "weekly":
+        valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+        if day_of_week not in valid_days:
+            raise HTTPException(status_code=400, detail="Invalid day_of_week. Use mon-sun.")
+
+    if request.frequency == "monthly" and (day_of_month < 1 or day_of_month > 28):
+        raise HTTPException(status_code=400, detail="day_of_month must be between 1 and 28.")
+
+    try:
+        result = schedule_scan_job(
+            frequency=request.frequency,
+            time_str=request.time,
+            domain=request.domain,
+            email=request.email,
+            day_of_week=day_of_week,
+            day_of_month=day_of_month,
+        )
+        return {"success": True, "message": "Scan scheduled successfully.", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 # --- NEW FULL ASSET DISCOVERY ENDPOINT ---
 @app.get("/api/discover")
@@ -603,6 +683,13 @@ def build_website_report_pdf(domain: str) -> bytes:
     payload = report_website(domain)
     asset = payload["website"]
     scan = asset.get("scan_result", {}) or {}
+    mobile_apps = asset.get("mobile_apps") or scan.get("mobile_info", {}).get("apps", [])
+    vulnerability_scan = scan.get("vulnerability_scan", {}) or {}
+    top_findings = vulnerability_scan.get("top_findings", [])
+    top_findings_text = ", ".join(
+        f"{f.get('type', 'Unknown')} ({f.get('severity', 'Info')})"
+        for f in top_findings[:3]
+    ) or "No major vulnerability findings from subdomain scanner."
 
     return generate_pdf_report({
         "report_title": f"Website Report - {asset.get('name')}",
@@ -610,7 +697,8 @@ def build_website_report_pdf(domain: str) -> bytes:
         "secondary_theme_color": "#0f172a",
         "executive_summary": (
             f"Website {asset.get('name')} currently has {payload['summary']['subdomains_total']} discovered subdomains. "
-            f"Active: {payload['summary']['subdomains_active']}, Inactive: {payload['summary']['subdomains_inactive']}."
+            f"Active: {payload['summary']['subdomains_active']}, Inactive: {payload['summary']['subdomains_inactive']}. "
+            f"Mobile apps discovered: {len(mobile_apps)}."
         ),
         "risk_score": payload["summary"]["risk_score"],
         "overall_risk": payload["summary"]["risk_level"],
@@ -618,6 +706,7 @@ def build_website_report_pdf(domain: str) -> bytes:
             {"label": "Risk Score", "value": f"{payload['summary']['risk_score']}%", "color": "#dc2626" if payload["summary"]["risk_score"] < 40 else "#f59e0b" if payload["summary"]["risk_score"] < 80 else "#16a34a"},
             {"label": "TLS Version", "value": scan.get("tls_version", "Unknown"), "color": "#0050cb"},
             {"label": "Subdomains", "value": str(payload["summary"]["subdomains_total"]), "color": "#0f172a"},
+            {"label": "Mobile Apps", "value": str(len(mobile_apps)), "color": "#16a34a"},
             {"label": "Active / Inactive", "value": f"{payload['summary']['subdomains_active']} / {payload['summary']['subdomains_inactive']}", "color": "#16a34a" if payload["summary"]["subdomains_inactive"] == 0 else "#f59e0b"},
         ],
         "chart_data": {
@@ -628,13 +717,75 @@ def build_website_report_pdf(domain: str) -> bytes:
             "colors": ["#16a34a", "#dc2626"],
         },
         "subdomain_rows": payload.get("subdomains", []),
+        "mobile_rows": [{"domain": asset.get("name"), "apps": mobile_apps}] if mobile_apps else [],
         "assets": [asset],
         "vulnerable_assets": [asset] if asset.get("risk", {}).get("risk_level") in ["High", "Critical"] else [],
         "recommendations": [
             "Review inactive subdomains for DNS cleanup and ownership drift.",
             "Prioritize TLS 1.3 adoption on lower-scoring subdomains.",
-            "Rotate certificates and retire legacy crypto where applicable."
+            "Rotate certificates and retire legacy crypto where applicable.",
+            f"Top vulnerability observations: {top_findings_text}",
         ]
+    })
+
+
+def build_company_history_report_pdf(domain: str) -> bytes:
+    matching_assets = _get_assets_for_domain(domain)
+    if not matching_assets:
+        raise HTTPException(status_code=404, detail="No scanned website found for the requested domain.")
+
+    latest = matching_assets[0]
+    latest_scan = latest.get("scan_result", {}) or {}
+    domain_name = latest.get("name", _normalize_domain(domain))
+
+    subdomain_map: Dict[str, dict] = {}
+    for asset in matching_assets:
+        scan_result = asset.get("scan_result", {}) or {}
+        for row in scan_result.get("all_subdomains_detailed", []) or []:
+            sub = row.get("subdomain")
+            if sub and sub not in subdomain_map:
+                subdomain_map[sub] = row
+
+    mobile_rows = _build_mobile_rows_from_assets(matching_assets)
+    risk_counts = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    for asset in matching_assets:
+        level = str(asset.get("risk", {}).get("risk_level", "")).lower()
+        if level in risk_counts:
+            risk_counts[level] += 1
+
+    return generate_pdf_report({
+        "report_title": f"Domain Scan History Report - {domain_name}",
+        "theme_color": "#0ea5e9",
+        "secondary_theme_color": "#0f172a",
+        "executive_summary": (
+            f"This historical report consolidates {len(matching_assets)} scans for {domain_name}. "
+            f"It includes subdomain posture evolution, vulnerability snapshots, and mobile discovery trends."
+        ),
+        "risk_score": latest.get("risk", {}).get("score", 0),
+        "overall_risk": latest.get("risk", {}).get("risk_level", "Unknown"),
+        "summary_cards": [
+            {"label": "Total Scans", "value": str(len(matching_assets)), "color": "#0f172a"},
+            {"label": "Latest Risk", "value": latest.get("risk", {}).get("risk_level", "Unknown"), "color": "#f59e0b"},
+            {"label": "Subdomains", "value": str(len(subdomain_map)), "color": "#0050cb"},
+            {"label": "Mobile Apps", "value": str(sum(len(r.get('apps', [])) for r in mobile_rows)), "color": "#16a34a"},
+        ],
+        "chart_data": {
+            "title": "Risk Distribution Across Scans",
+            "type": "bar",
+            "labels": ["Low", "Medium", "High", "Critical"],
+            "values": [risk_counts["low"], risk_counts["medium"], risk_counts["high"], risk_counts["critical"]],
+            "color": "#0ea5e9",
+        },
+        "subdomain_rows": list(subdomain_map.values()),
+        "mobile_rows": mobile_rows,
+        "assets": matching_assets,
+        "vulnerable_assets": [a for a in matching_assets if a.get("risk", {}).get("risk_level") in ["High", "Critical"]],
+        "recommendations": [
+            "Track risk score movement across consecutive scans and verify remediation impact.",
+            "Validate mobile listings against official publisher ownership.",
+            "Prioritize persistent critical subdomains with recurring vulnerability findings.",
+            f"Latest TLS posture: {latest_scan.get('tls_version', 'Unknown')} / {latest_scan.get('algorithm', 'Unknown')}",
+        ],
     })
 
 def build_asset_discovery_report_pdf() -> bytes:
@@ -829,6 +980,105 @@ def download_mobile_app_pdf(x_user_role: Optional[str] = Query(None), x_user_rol
     date_prefix = datetime.datetime.now().strftime('%Y_%m_%d')
     return _pdf_response(pdf_bytes, f"{date_prefix}-Mobile_App_Report.pdf")
 
+
+@app.get("/api/reports/history")
+def report_history(domain: Optional[str] = None, limit: int = 50):
+    """Return report-like historical rows from prior scans, optionally filtered by domain."""
+    limit = max(1, min(limit, 200))
+    assets = _get_assets_for_domain(domain) if domain else sorted(
+        get_all_assets_list(),
+        key=lambda item: _parse_iso_datetime(item.get("detection_date", "")),
+        reverse=True,
+    )
+
+    rows = []
+    for asset in assets[:limit]:
+        risk = asset.get("risk", {}) or {}
+        detection_date = asset.get("detection_date") or ""
+        scan = asset.get("scan_result", {}) or {}
+        rows.append({
+            "report_id": f"RP-{str(asset.get('id', 'NA'))[:8].upper()}",
+            "timestamp": detection_date,
+            "domain": asset.get("name"),
+            "risk_level": risk.get("risk_level", "Unknown"),
+            "score": risk.get("score", 0),
+            "generated_by": asset.get("metadata", {}).get("scanned_by_role", "System"),
+            "tls_version": scan.get("tls_version", "Unknown"),
+            "algorithm": scan.get("algorithm", "Unknown"),
+        })
+
+    return {
+        "report_type": "History",
+        "summary": {
+            "total": len(rows),
+            "domain_filter": _normalize_domain(domain) if domain else None,
+        },
+        "data": rows,
+    }
+
+
+class CompanyEmailReportRequest(BaseModel):
+    domain: str
+    recipient: str
+    include_history: bool = True
+
+
+def send_company_report_email(recipient: str, domain: str, include_history: bool = True) -> dict:
+    normalized_domain = _normalize_domain(domain)
+    matching_assets = _get_assets_for_domain(normalized_domain)
+    if not matching_assets:
+        raise HTTPException(status_code=404, detail="No scan history found for the requested domain.")
+
+    latest_asset = matching_assets[0]
+    latest_risk = latest_asset.get("risk", {}) or {}
+    attachments = [
+        {
+            "filename": f"{datetime.datetime.now().strftime('%Y_%m_%d')}-{normalized_domain}-Website_Report.pdf",
+            "bytes": build_website_report_pdf(normalized_domain),
+        }
+    ]
+
+    if include_history:
+        attachments.append({
+            "filename": f"{datetime.datetime.now().strftime('%Y_%m_%d')}-{normalized_domain}-History_Report.pdf",
+            "bytes": build_company_history_report_pdf(normalized_domain),
+        })
+
+    summary = summarize_report({
+        "domain": normalized_domain,
+        "total_scans": len(matching_assets),
+        "latest_risk": latest_risk,
+        "latest_scan": latest_asset.get("scan_result", {}),
+    })
+
+    subject = f"Quantum Shield Domain Report - {normalized_domain} - {latest_risk.get('risk_level', 'Unknown')}"
+    body = (
+        f"Executive Summary:\n{summary}\n\n"
+        f"Domain: {normalized_domain}\n"
+        f"Total historical scans included: {len(matching_assets)}\n"
+        f"Latest risk score: {latest_risk.get('score', 0)}\n"
+        "Attachments include subdomain intelligence and mobile app discovery details."
+    )
+
+    success = send_email(recipient, subject, body, attachments)
+    if success is not True:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {success}")
+
+    return {
+        "status": "success",
+        "message": f"Report for {normalized_domain} sent to {recipient}",
+        "domain": normalized_domain,
+        "recipient": recipient,
+        "attachments": [item["filename"] for item in attachments],
+        "scan_count": len(matching_assets),
+    }
+
+
+@app.post("/api/reports/company/email")
+def email_company_report(request: CompanyEmailReportRequest):
+    """Send a domain-specific report bundle to email, including historical scans for that domain."""
+    return send_company_report_email(request.recipient, request.domain, request.include_history)
+
 # --- MODULE 9: AI CHATBOT ---
 class ChatRequest(BaseModel):
     message: str
@@ -850,6 +1100,11 @@ def chat_with_assistant(request: ChatRequest):
     if result["action"] == "EMAIL_REPORT":
         recipient = result["parameters"].get("recipient", "admin@quantumshield.local")
         target_domain = result["parameters"].get("domain")
+        if target_domain:
+            outcome = send_company_report_email(recipient, target_domain, include_history=True)
+            result["response"] = outcome["message"]
+            return result
+
         risk_data = get_dashboard_metrics()
         all_assets = get_all_assets_list()
         vuln_assets = [a for a in all_assets if a.get("risk", {}).get("risk_level") in ["High", "Medium"]]
@@ -996,10 +1251,14 @@ def auth_direct_login(request: DirectLoginRequest):
 
 class EmailRequest(BaseModel):
     recipient: str
+    domain: Optional[str] = None
+    include_history: bool = True
 
 @app.post("/api/email")
 def send_report(request: EmailRequest):
-    """Mock endpoint to simulate dispatching SMTP reports."""
+    """Email a domain-specific report bundle when a domain is provided; fallback to queue-style response otherwise."""
+    if request.domain:
+        return send_company_report_email(request.recipient, request.domain, request.include_history)
     return {"status": "success", "message": f"Enterprise Cryptographic Risk Report queued for {request.recipient}"}
 
 
