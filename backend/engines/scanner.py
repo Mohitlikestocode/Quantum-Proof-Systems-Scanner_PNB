@@ -1,4 +1,3 @@
-import random
 import os
 import requests
 import socket
@@ -27,8 +26,12 @@ COMMON_SUBDOMAIN_PREFIXES = [
 
 MAX_SUBDOMAINS_TO_SCAN = 40
 SUBDOMAIN_SCAN_WORKERS = 12
-MAX_VULN_SCAN_TARGETS = 25
+MAX_VULN_SCAN_TARGETS = 15
 VULN_SCAN_WORKERS = 10
+VULN_TEST_PARAMS = ["id", "q", "search", "item", "next", "url", "redirect", "file"]
+VULN_SQL_PAYLOADS = ["'", "' OR '1'='1", '" OR "1"="1', "1;--", "'--"]
+VULN_XSS_PAYLOAD = "<script>alert(1)</script>"
+VULN_REDIRECT_TARGET = "https://example.com"
 
 
 def _resolve_scan_profile(mode: str) -> dict:
@@ -582,6 +585,221 @@ def _security_header_findings(headers: dict) -> List[dict]:
                 "evidence": description,
             })
     return findings
+
+
+def _pick_http_response(host: str, timeout: int = 8, path: str = "/", params: Optional[dict] = None, allow_redirects: bool = True):
+    last_error = None
+    for scheme in ("https", "http"):
+        url = f"{scheme}://{host}{path}"
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                timeout=timeout,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html,application/xhtml+xml"},
+                allow_redirects=allow_redirects,
+            )
+            return {
+                "ok": True,
+                "scheme": scheme,
+                "url": response.url,
+                "response": response,
+                "error": None,
+            }
+        except requests.RequestException as exc:
+            last_error = exc
+    return {
+        "ok": False,
+        "scheme": None,
+        "url": None,
+        "response": None,
+        "error": str(last_error) if last_error else "Connection failed",
+    }
+
+
+def _infer_hosting_from_response(host: str, response: Optional[requests.Response]) -> dict:
+    headers = response.headers if response is not None else {}
+    server = str(headers.get("Server", "")).lower()
+    via = str(headers.get("Via", "")).lower()
+    cloud_flags = " ".join([server, via, str(headers.get("CF-RAY", "")).lower(), str(headers.get("x-amz-cf-id", "")).lower()])
+
+    if any(token in cloud_flags for token in ["cloudflare", "cf-ray", "cf", "x-amz-cf-id"]):
+        return {"provider": "Cloudflare", "type": "third_party"}
+    if any(token in cloud_flags for token in ["aws", "amazon", "elb", "cloudfront", "x-amz"]):
+        return {"provider": "AWS", "type": "third_party"}
+    if any(token in cloud_flags for token in ["azure", "microsoft", "front door", "arr/"]):
+        return {"provider": "Azure", "type": "third_party"}
+    if any(token in cloud_flags for token in ["fastly", "akamai", "vercel", "netlify"]):
+        return {"provider": server or "CDN", "type": "third_party"}
+    return {"provider": host, "type": "internal"}
+
+
+def _build_vuln_finding(vuln_type: str, severity: str, evidence: str, endpoint: str, parameter: Optional[str] = None, payload: Optional[str] = None) -> dict:
+    finding = {
+        "type": vuln_type,
+        "severity": severity,
+        "evidence": evidence,
+        "endpoint": endpoint,
+    }
+    if parameter:
+        finding["parameter"] = parameter
+    if payload:
+        finding["payload"] = payload
+    return finding
+
+
+def _scan_vulnerability_vectors(host: str, timeout: int = 8) -> dict:
+    root_probe = _pick_http_response(host, timeout=timeout, path="/", params=None, allow_redirects=True)
+    findings: List[dict] = []
+    tested_endpoints: List[str] = []
+    headers = {}
+
+    if root_probe.get("response") is not None:
+        response = root_probe["response"]
+        headers = dict(response.headers)
+        tested_endpoints.append(response.url)
+        findings.extend(_security_header_findings(response.headers))
+
+        body = response.text or ""
+        body_lower = body.lower()
+        if any(marker in body_lower for marker in ["index of /", "directory listing", "parent directory"]):
+            findings.append(_build_vuln_finding(
+                "Directory Listing",
+                "Medium",
+                "Directory listing content detected on root page",
+                response.url,
+            ))
+
+        if any(marker in body_lower for marker in ["swagger", "openapi", "graphql", "phpinfo()"]):
+            findings.append(_build_vuln_finding(
+                "Sensitive Exposure",
+                "Medium",
+                "Potentially sensitive documentation or diagnostic output exposed",
+                response.url,
+            ))
+
+        if headers.get("Access-Control-Allow-Origin") == "*":
+            findings.append(_build_vuln_finding(
+                "CORS Misconfiguration",
+                "Medium",
+                "Access-Control-Allow-Origin is wildcard",
+                response.url,
+            ))
+
+    sql_endpoints = [
+        (param, payload)
+        for param in VULN_TEST_PARAMS[:4]
+        for payload in VULN_SQL_PAYLOADS
+    ]
+    for parameter, payload in sql_endpoints:
+        probe = _pick_http_response(host, timeout=timeout, path="/", params={parameter: payload}, allow_redirects=True)
+        response = probe.get("response")
+        if not response:
+            continue
+        tested_endpoints.append(response.url)
+        text = response.text or ""
+        lowered = text.lower()
+        sql_signals = ["sql syntax", "mysql", "psql", "odbc", "sqlite", "ora-", "postgresql", "mariadb", "you have an error in your sql"]
+        if any(signal in lowered for signal in sql_signals):
+            findings.append(_build_vuln_finding(
+                "SQL Injection",
+                "High",
+                "Database error pattern observed after SQLi payload injection",
+                response.url,
+                parameter=parameter,
+                payload=payload,
+            ))
+            break
+        if payload in text:
+            findings.append(_build_vuln_finding(
+                "SQL Injection",
+                "High",
+                "Payload reflected in response body after SQLi attempt",
+                response.url,
+                parameter=parameter,
+                payload=payload,
+            ))
+            break
+
+    xss_probe_params = ["q", "search", "query", "keyword", "message"]
+    for parameter in xss_probe_params:
+        probe = _pick_http_response(host, timeout=timeout, path="/", params={parameter: VULN_XSS_PAYLOAD}, allow_redirects=True)
+        response = probe.get("response")
+        if not response:
+            continue
+        tested_endpoints.append(response.url)
+        text = (response.text or "").lower()
+        if VULN_XSS_PAYLOAD.lower() in text:
+            findings.append(_build_vuln_finding(
+                "Cross-Site Scripting (XSS)",
+                "High",
+                "Script payload reflected in response body",
+                response.url,
+                parameter=parameter,
+                payload=VULN_XSS_PAYLOAD,
+            ))
+            break
+
+    redirect_params = ["next", "url", "redirect", "return", "dest", "continue"]
+    for parameter in redirect_params:
+        probe = _pick_http_response(host, timeout=timeout, path="/", params={parameter: VULN_REDIRECT_TARGET}, allow_redirects=False)
+        response = probe.get("response")
+        if not response:
+            continue
+        tested_endpoints.append(response.url)
+        location = response.headers.get("Location", "")
+        if location and VULN_REDIRECT_TARGET in location:
+            findings.append(_build_vuln_finding(
+                "Open Redirect",
+                "Medium",
+                "External redirect target echoed in Location header",
+                response.url,
+                parameter=parameter,
+                payload=VULN_REDIRECT_TARGET,
+            ))
+            break
+
+    if root_probe.get("response") is not None:
+        response = root_probe["response"]
+        if any(token in str(response.headers.get("Server", "")).lower() for token in ["apache/2.2", "iis/6", "php/5", "asp.net/2"]):
+            findings.append(_build_vuln_finding(
+                "Security Misconfiguration",
+                "Medium",
+                "Legacy server banner observed",
+                response.url,
+            ))
+
+    # De-duplicate findings by type + endpoint + evidence.
+    unique_findings = []
+    seen = set()
+    for finding in findings:
+        fingerprint = (finding.get("type"), finding.get("endpoint"), finding.get("evidence"), finding.get("parameter"), finding.get("payload"))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        unique_findings.append(finding)
+
+    severity_counter = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
+    type_counter: Dict[str, int] = {}
+    for finding in unique_findings:
+        severity = finding.get("severity", "Info")
+        vuln_type = finding.get("type", "Unknown")
+        severity_counter[severity] = severity_counter.get(severity, 0) + 1
+        type_counter[vuln_type] = type_counter.get(vuln_type, 0) + 1
+
+    return {
+        "scanner_name": "HTTP Subdomain Vulnerability Scanner",
+        "target": host,
+        "root_url": root_probe.get("url"),
+        "root_status": root_probe.get("response").status_code if root_probe.get("response") is not None else None,
+        "tested_endpoints": tested_endpoints,
+        "findings": unique_findings,
+        "severity_breakdown": severity_counter,
+        "vulnerability_types": type_counter,
+        "hosting": _infer_hosting_from_response(host, root_probe.get("response")),
+        "status": "scanned" if root_probe.get("response") is not None else "unreachable",
+        "error": root_probe.get("error"),
+    }
 
 
 def _scan_single_host_vulnerabilities(host: str, timeout: int = 6) -> dict:
@@ -1168,19 +1386,11 @@ def discover_mobile_apps(domain: str) -> dict:
 
 
 def discover_vulnerabilities(domain: str) -> tuple:
-    """Mock vulnerabilities and hosting (Module 8)."""
-    vulns = []
-    if random.random() < 0.3:
-        vulns.append({"type": "SQL Injection", "severity": "High"})
-    if random.random() < 0.5:
-        vulns.append({"type": "XSS", "severity": "Medium"})
-
-    hosting = {
-        "provider": random.choice(["AWS", "Azure", "GCP", "Internal DC"]),
-        "type": "third_party" if random.random() < 0.7 else "internal",
-    }
-
-    return vulns, hosting
+    """Run a real vulnerability probe on the root domain and return summary findings plus hosting inference."""
+    scan = _scan_vulnerability_vectors(domain)
+    top_findings = scan.get("findings", [])
+    hosting = scan.get("hosting") or {"provider": "Unknown", "type": "internal"}
+    return top_findings[:5], hosting
 
 
 def build_asset_segregation(domain: str, subdomain_discovery: dict, mobile_info: dict, vulnerability_scan: dict) -> dict:
@@ -1238,6 +1448,9 @@ def scan_target(domain: str, mode: str = "Full Deep Scan") -> dict:
                 "severity": finding.get("severity"),
                 "subdomain": finding.get("subdomain"),
                 "evidence": finding.get("evidence"),
+                "endpoint": finding.get("endpoint"),
+                "parameter": finding.get("parameter"),
+                "payload": finding.get("payload"),
             }
             for finding in vulnerability_scan["top_findings"][:10]
         ]
