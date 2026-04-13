@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -6,6 +7,7 @@ interface SidebarProps {
 }
 
 const Sidebar = ({ isOpen, setIsOpen }: SidebarProps) => {
+  const navigate = useNavigate();
   const getNavLinkClass = ({ isActive }: { isActive: boolean }) => {
     return isActive
       ? "flex items-center gap-3 px-3 py-2.5 text-blue-700 font-semibold border-r-4 border-blue-700 bg-blue-50/50 transition-colors duration-200"
@@ -86,17 +88,29 @@ const Sidebar = ({ isOpen, setIsOpen }: SidebarProps) => {
       </nav>
 
       <div className="mt-auto space-y-1">
-        <button className="w-full bg-gradient-to-br from-primary to-primary-container text-white py-2.5 rounded-lg text-sm font-semibold mb-6 shadow-md shadow-primary/20 hover:scale-105 active:scale-95 transition-transform flex items-center justify-center gap-2">
+        <button
+          onClick={() => {
+            navigate('/scanner');
+            setIsOpen(false);
+          }}
+          className="w-full bg-gradient-to-br from-primary to-primary-container text-white py-2.5 rounded-lg text-sm font-semibold mb-6 shadow-md shadow-primary/20 hover:scale-105 active:scale-95 transition-transform flex items-center justify-center gap-2"
+        >
           Start Scan
         </button>
-        <div className="flex items-center gap-3 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 transition-colors duration-200 rounded cursor-pointer">
+        <button
+          onClick={() => navigate('/reports')}
+          className="w-full flex items-center gap-3 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 transition-colors duration-200 rounded cursor-pointer"
+        >
           <span className="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
           <span className="font-sans text-[0.875rem] font-medium tracking-tight">Settings</span>
-        </div>
-        <div className="flex items-center gap-3 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 transition-colors duration-200 rounded cursor-pointer">
+        </button>
+        <button
+          onClick={() => window.open('mailto:support@quantumshield.local?subject=Quantum%20Shield%20Support%20Request')}
+          className="w-full flex items-center gap-3 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 transition-colors duration-200 rounded cursor-pointer"
+        >
           <span className="material-symbols-outlined text-[20px]" data-icon="help">help</span>
           <span className="font-sans text-[0.875rem] font-medium tracking-tight">Support</span>
-        </div>
+        </button>
       </div>
     </aside>
     </>

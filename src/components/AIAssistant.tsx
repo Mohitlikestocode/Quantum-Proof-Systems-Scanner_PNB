@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 const AIAssistant = () => {
   const [input, setInput] = useState("");
@@ -6,6 +6,10 @@ const AIAssistant = () => {
   const [showToast, setShowToast] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [showActiveContext, setShowActiveContext] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const inFlightRef = useRef(false);
+  const lastSubmissionRef = useRef<{ message: string; ts: number } | null>(null);
   const [messages, setMessages] = useState<any[]>([
     {
       role: 'ai',
@@ -14,24 +18,53 @@ const AIAssistant = () => {
   ]);
 
   const handleSend = async (manualInput?: string) => {
-    const userMsg = manualInput || input.trim();
+    const userMsg = (manualInput || input).trim();
     if (!userMsg) return;
+
+    // Guard against accidental double-submit from rapid key/mouse actions.
+    if (inFlightRef.current) return;
+    const now = Date.now();
+    if (
+      lastSubmissionRef.current &&
+      lastSubmissionRef.current.message === userMsg &&
+      now - lastSubmissionRef.current.ts < 1200
+    ) {
+      return;
+    }
+
+    inFlightRef.current = true;
+    lastSubmissionRef.current = { message: userMsg, ts: now };
+
     setInput("");
     setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setIsTyping(true);
 
     try {
-      const res = await fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/chat', {
+      const res = await fetch(apiBase + '/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg })
       });
-      const data = await res.json();
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = {};
+
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const rawText = await res.text();
+        data = { detail: rawText || 'Unexpected response from AI service.' };
+      }
+
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.message || `AI service request failed with status ${res.status}`);
+      }
+
+      const assistantText = data?.response || data?.explanation || 'Command received.';
       
-      setMessages(prev => [...prev, { 
-        role: 'system', 
-        action: data.action, 
-        text: data.response,
+      setMessages(prev => [...prev, {
+        role: 'system',
+        action: data.action,
+        text: assistantText,
         data: data.data
       }]);
 
@@ -48,19 +81,21 @@ const AIAssistant = () => {
          setTimeout(() => setShowToast(false), 4000);
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("Chat failed", err);
-      setMessages(prev => [...prev, { role: 'system', text: "Error communicating with AI engine." }]);
-      setToastMsg(`Action Failed: Connection Error`);
+      const errorMessage = err?.message || 'Unable to reach AI service. Ensure backend is running on port 8010.';
+      setMessages(prev => [...prev, { role: 'error', text: `AI request failed: ${errorMessage}` }]);
+      setToastMsg(`Action Failed: ${errorMessage}`);
       setShowToast(true);
       setTimeout(() => setShowToast(false), 4000);
     } finally {
+      inFlightRef.current = false;
       setIsTyping(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.metaKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       handleSend();
     }
   };
@@ -90,18 +125,21 @@ const AIAssistant = () => {
               <div className="bg-surface-container-low rounded-xl p-4 flex-1 flex flex-col overflow-hidden">
                 <p className="text-[10px] font-bold text-on-surface-variant tracking-widest uppercase mb-4">Recent Conversations</p>
                 <div className="space-y-3 overflow-y-auto pr-2">
-                  <div className="p-3 bg-surface-container-lowest rounded-lg border-l-4 border-primary shadow-sm cursor-pointer">
+                  <button onClick={() => handleSend("Summarize transition plan for TLS 1.3 migration")}
+                    className="w-full text-left p-3 bg-surface-container-lowest rounded-lg border-l-4 border-primary shadow-sm cursor-pointer">
                     <p className="text-xs font-bold truncate">TLS 1.3 Transition Plan</p>
                     <p className="text-[10px] text-on-surface-variant mt-1">2 mins ago</p>
-                  </div>
-                  <div className="p-3 hover:bg-surface-container-highest/50 rounded-lg cursor-pointer transition-colors">
+                  </button>
+                  <button onClick={() => handleSend("Explain symmetric key rotation best practices")}
+                    className="w-full text-left p-3 hover:bg-surface-container-highest/50 rounded-lg cursor-pointer transition-colors">
                     <p className="text-xs font-medium text-on-surface-variant truncate">Symmetric Key Rotation</p>
                     <p className="text-[10px] text-on-surface-variant/60 mt-1">1 hour ago</p>
-                  </div>
-                  <div className="p-3 hover:bg-surface-container-highest/50 rounded-lg cursor-pointer transition-colors">
+                  </button>
+                  <button onClick={() => handleSend("Run a NIST compliance audit summary for latest scans")}
+                    className="w-full text-left p-3 hover:bg-surface-container-highest/50 rounded-lg cursor-pointer transition-colors">
                     <p className="text-xs font-medium text-on-surface-variant truncate">NIST Compliance Audit</p>
                     <p className="text-[10px] text-on-surface-variant/60 mt-1">Yesterday</p>
-                  </div>
+                  </button>
                 </div>
               </div>
               
@@ -184,7 +222,7 @@ const AIAssistant = () => {
                                   <div className="w-6 h-6 rounded-full bg-tertiary flex items-center justify-center">
                                     <span className="material-symbols-outlined text-[14px] text-white">check</span>
                                   </div>
-                                  <span className="text-xs font-semibold text-on-surface">{msg.text}</span>
+                                  <span className="text-xs font-semibold text-on-surface">{msg.text || msg.action || 'Command completed.'}</span>
                                 </div>
                                 <span className="text-[10px] font-bold text-tertiary">
                                   {msg.action === "SCHEDULE_SCAN" ? "SCHEDULED" : msg.action === "EMAIL_REPORT" ? "SENT" : "SUCCESS"}
@@ -192,6 +230,17 @@ const AIAssistant = () => {
                               </div>
                             </div>
                           </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {msg.role === 'error' && (
+                      <div className="flex gap-4 max-w-3xl">
+                        <div className="w-10 h-10 rounded-lg bg-error/90 flex-shrink-0 flex items-center justify-center text-white">
+                          <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>error</span>
+                        </div>
+                        <div className="bg-error/10 border border-error/30 p-5 rounded-2xl rounded-tl-none">
+                          <p className="text-sm font-semibold text-error">{msg.text}</p>
                         </div>
                       </div>
                     )}
@@ -215,9 +264,20 @@ const AIAssistant = () => {
               {/* Input Area */}
               <div className="p-6 bg-surface-container-low border-t border-outline-variant/10">
                 <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-2 focus-within:ring-2 ring-primary/20 transition-all flex items-end gap-3 shadow-inner">
-                  <button className="p-2 hover:bg-surface-container-low rounded-lg transition-colors text-on-surface-variant w-full sm:w-auto">
+                  <button onClick={() => fileInputRef.current?.click()} className="p-2 hover:bg-surface-container-low rounded-lg transition-colors text-on-surface-variant w-full sm:w-auto" title="Attach a file reference">
                     <span className="material-symbols-outlined">attach_file</span>
                   </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      handleSend(`Analyze attachment context for file: ${file.name}`);
+                      e.target.value = '';
+                    }}
+                  />
                   <textarea 
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
@@ -236,16 +296,16 @@ const AIAssistant = () => {
                 </div>
                 <div className="flex justify-between items-center mt-3 px-1">
                   <div className="flex flex-col sm:flex-row gap-4">
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
+                    <button onClick={() => setMessages([{ role: 'ai', text: "Greetings, Administrator. I am your Precise Sentinel AI. I can help you orchestrate scans, analyze cryptographic vulnerabilities, or automate reporting across your quantum-vulnerable infrastructure.\n\nWhat would you like to execute today?" }])} className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
                       <span className="material-symbols-outlined text-[14px]">history</span>
                       RESTORE SESSION
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
+                    </button>
+                    <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/docs', '_blank')} className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
                       <span className="material-symbols-outlined text-[14px]">auto_fix</span>
                       MODEL SETTINGS
-                    </div>
+                    </button>
                   </div>
-                  <p className="text-[10px] text-on-surface-variant/60 font-medium">Press ⌘ + Enter to send</p>
+                  <p className="text-[10px] text-on-surface-variant/60 font-medium">Press Ctrl/Cmd + Enter to send</p>
                 </div>
               </div>
             </div>

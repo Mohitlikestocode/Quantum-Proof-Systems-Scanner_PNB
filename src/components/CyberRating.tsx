@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const CyberRating = () => {
+  const navigate = useNavigate();
   const [vulnerableAssets, setVulnerableAssets] = useState<any[]>([]);
 
   useEffect(() => {
@@ -185,10 +187,10 @@ const CyberRating = () => {
       <div className="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden border border-outline-variant/10">
         <div className="p-6 border-b border-surface-container-low flex justify-between items-center flex-col sm:flex-row gap-4 items-start sm:items-center">
           <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Asset Vulnerability Matrix</h3>
-          <div className="flex items-center gap-2 cursor-pointer hover:text-primary transition-colors">
+          <button onClick={() => navigate('/asset-inventory')} className="flex items-center gap-2 cursor-pointer hover:text-primary transition-colors">
             <span className="material-symbols-outlined text-slate-400">filter_list</span>
             <span className="text-xs font-bold text-on-surface-variant uppercase tracking-tighter">Filter by Score</span>
-          </div>
+          </button>
         </div>
         
         <div className="overflow-x-auto custom-scrollbar w-full">
@@ -291,7 +293,7 @@ const CyberRating = () => {
           </table>
         </div>
         <div className="p-4 bg-surface-container-low/30 border-t border-surface-container-low flex justify-center">
-          <button className="text-primary text-xs font-bold uppercase tracking-widest hover:underline transition-colors w-full sm:w-auto">View All 412 Assets</button>
+          <button onClick={() => navigate('/asset-inventory')} className="text-primary text-xs font-bold uppercase tracking-widest hover:underline transition-colors w-full sm:w-auto">View All 412 Assets</button>
         </div>
       </div>
     </main>

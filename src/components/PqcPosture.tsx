@@ -1,4 +1,8 @@
+import { useNavigate } from 'react-router-dom';
+
 const PqcPosture = () => {
+  const navigate = useNavigate();
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
   return (
     <main className="md:ml-64 pt-24 px-8 pb-12 min-h-screen">
       <header className="mb-8">
@@ -101,7 +105,7 @@ const PqcPosture = () => {
                 <div>
                   <h4 className="text-xs font-bold text-on-surface">Upgrade TLS Protocols</h4>
                   <p className="text-[0.7rem] text-on-surface-variant mt-1 leading-relaxed">Mandate TLS 1.3 with hybrid PQC key exchange for all internal gateways.</p>
-                  <button className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">Apply Config</button>
+                  <button onClick={() => navigate('/scanner')} className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">Apply Config</button>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-4">
@@ -111,7 +115,7 @@ const PqcPosture = () => {
                 <div>
                   <h4 className="text-xs font-bold text-on-surface">Replace RSA with CRYSTALS-Kyber</h4>
                   <p className="text-[0.7rem] text-on-surface-variant mt-1 leading-relaxed">Decommission RSA-2048 in critical load balancers. Replace with NIST Level 3 PQC.</p>
-                  <button className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">View Assets</button>
+                  <button onClick={() => navigate('/asset-inventory')} className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">View Assets</button>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-4">
@@ -121,7 +125,7 @@ const PqcPosture = () => {
                 <div>
                   <h4 className="text-xs font-bold text-on-surface">Update Crypto Libraries</h4>
                   <p className="text-[0.7rem] text-on-surface-variant mt-1 leading-relaxed">Version 4.2.0 of OpenSSL contains PQC patches. 48 nodes require updates.</p>
-                  <button className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">Deploy Update</button>
+                  <button onClick={() => window.open(apiBase + '/api/reports/vulnerable-download?x_user_role=Super%20Admin', '_blank')} className="mt-2 text-primary text-[0.625rem] font-extrabold uppercase hover:underline w-full sm:w-auto">Deploy Update</button>
                 </div>
               </div>
             </div>
@@ -134,8 +138,8 @@ const PqcPosture = () => {
         <div className="px-6 py-5 flex items-center justify-between">
           <h3 className="text-sm font-bold uppercase tracking-tight text-on-surface">Asset Posture Details</h3>
           <div className="flex gap-2">
-            <button className="px-3 py-1.5 text-[0.7rem] font-bold border border-outline-variant/30 rounded hover:bg-surface-container-low transition-colors w-full sm:w-auto">Export CSV</button>
-            <button className="px-3 py-1.5 text-[0.7rem] font-bold bg-primary text-white rounded hover:bg-primary-container shadow-md shadow-primary/20 transition-colors w-full sm:w-auto">Detailed Audit</button>
+            <button onClick={() => window.open(apiBase + '/api/assets', '_blank')} className="px-3 py-1.5 text-[0.7rem] font-bold border border-outline-variant/30 rounded hover:bg-surface-container-low transition-colors w-full sm:w-auto">Export CSV</button>
+            <button onClick={() => navigate('/reports')} className="px-3 py-1.5 text-[0.7rem] font-bold bg-primary text-white rounded hover:bg-primary-container shadow-md shadow-primary/20 transition-colors w-full sm:w-auto">Detailed Audit</button>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -230,7 +234,7 @@ const PqcPosture = () => {
           </table>
         </div>
         <div className="px-6 py-4 bg-surface-container-low/30 border-t border-outline-variant/10 text-center">
-          <button className="text-[0.7rem] font-bold text-primary hover:text-primary-container transition-colors w-full sm:w-auto">View All 1,402 Assets</button>
+          <button onClick={() => navigate('/asset-inventory')} className="text-[0.7rem] font-bold text-primary hover:text-primary-container transition-colors w-full sm:w-auto">View All 1,402 Assets</button>
         </div>
       </section>
     </main>

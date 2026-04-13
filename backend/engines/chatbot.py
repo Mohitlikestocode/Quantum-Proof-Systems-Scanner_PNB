@@ -30,9 +30,12 @@ def process_chat_message(message: str) -> dict:
     Hybrid offline AI action parser using regex to extract user intent.
     """
     msg_lower = message.lower()
-    domain_match = re.search(r'(?:report\s+of|report\s+for|website\s+of|website|scan\s+report\s+of|scan\s+report\s+for)\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', msg_lower)
-    if not domain_match:
-        domain_match = re.search(r'([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', msg_lower)
+    # Only treat domains as explicit targets when they are asked for directly.
+    # Do not auto-extract domains from recipient email addresses (e.g., gmail.com).
+    domain_match = re.search(
+        r'(?:report\s+of|report\s+for|website\s+of|website\s+for|scan\s+report\s+of|scan\s+report\s+for|for\s+domain)\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
+        msg_lower,
+    )
     target_domain = _safe_domain(domain_match.group(1)) if domain_match else None
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', msg_lower)
     target_email = _safe_email(email_match.group(0)) if email_match else None
@@ -74,10 +77,14 @@ def process_chat_message(message: str) -> dict:
     # Intent: Report Generation / Email
     if "report" in msg_lower and (target_email or "email" in msg_lower or "send" in msg_lower):
         email = target_email if target_email else "admin@quantumshield.local"
+        if target_domain:
+            explanation = f"I'm generating the website-specific report bundle for {target_domain} and sending it to {email}."
+        else:
+            explanation = f"I'm generating the overall report bundle for all scanned assets and sending it to {email}."
         return {
             "action": "EMAIL_REPORT",
             "parameters": {"recipient": email, "domain": target_domain},
-            "explanation": f"I'm generating the website and security report bundle for {target_domain or 'your latest scan'} and sending it to {email}."
+            "explanation": explanation
         }
     elif "report" in msg_lower:
         return {

@@ -1,14 +1,42 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const Cbom = () => {
+  const navigate = useNavigate();
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
   const [cbomData, setCbomData] = useState<any[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(0);
 
-  useEffect(() => {
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/cbom')
+  const loadCbom = () => {
+    fetch(apiBase + '/api/cbom')
       .then(res => res.json())
       .then(data => setCbomData(data))
       .catch(err => console.error("Failed to fetch CBOM", err));
-  }, []);
+  };
+
+  useEffect(() => {
+    loadCbom();
+  }, [apiBase]);
+
+  const filteredCbom = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return cbomData;
+    return cbomData.filter((item) =>
+      String(item.algorithm_name || '').toLowerCase().includes(q) ||
+      String(item.oid || '').toLowerCase().includes(q) ||
+      String(item.type || '').toLowerCase().includes(q)
+    );
+  }, [cbomData, searchTerm]);
+
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(filteredCbom.length / pageSize));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pagedCbom = filteredCbom.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  useEffect(() => {
+    setPage(0);
+  }, [searchTerm, cbomData.length]);
   return (
     <main className="md:ml-64 mt-16 p-4 sm:p-6 md:p-8 bg-background min-h-screen">
       {/* Page Header */}
@@ -23,10 +51,10 @@ const Cbom = () => {
           <p className="text-on-surface-variant mt-1 text-sm max-w-2xl">Detailed inventory of cryptographic assets, quantum-safe readiness, and certificate hierarchies across the enterprise network.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-          <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/reports/download')} className="px-4 py-2 bg-surface-container-highest text-on-surface text-sm font-semibold rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 w-full sm:w-auto">
+          <button onClick={() => window.open(apiBase + '/api/reports/download')} className="px-4 py-2 bg-surface-container-highest text-on-surface text-sm font-semibold rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 w-full sm:w-auto">
             <span className="material-symbols-outlined text-[18px]">download</span> Export CBOM
           </button>
-          <button onClick={() => alert("Asset Registration Flow initiated in new window")} className="px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-white text-sm font-semibold rounded-lg shadow-sm flex items-center gap-2 w-full sm:w-auto">
+          <button onClick={() => navigate('/scanner')} className="px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-white text-sm font-semibold rounded-lg shadow-sm flex items-center gap-2 w-full sm:w-auto">
             <span className="material-symbols-outlined text-[18px]">add</span> Register Asset
           </button>
         </div>
@@ -147,14 +175,14 @@ const Cbom = () => {
             <h3 className="font-bold text-on-surface text-sm">Algorithm Inventory</h3>
             <div className="flex items-center bg-surface-container-low rounded px-2 py-1 gap-2 border border-outline-variant/20">
               <span className="material-symbols-outlined text-slate-400 text-[18px]">search</span>
-              <input className="bg-transparent border-none text-xs focus:ring-0 p-0 w-full sm:w-48 text-on-surface-variant placeholder:text-slate-400 outline-none" placeholder="Filter OID or Name..." type="text" />
+              <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-transparent border-none text-xs focus:ring-0 p-0 w-full sm:w-48 text-on-surface-variant placeholder:text-slate-400 outline-none" placeholder="Filter OID or Name..." type="text" />
             </div>
           </div>
           <div className="flex gap-2">
-            <button className="p-1.5 hover:bg-surface-container-high rounded transition-colors text-on-surface-variant">
+            <button onClick={() => setSearchTerm('')} className="p-1.5 hover:bg-surface-container-high rounded transition-colors text-on-surface-variant" title="Clear filters">
               <span className="material-symbols-outlined text-[20px]">tune</span>
             </button>
-            <button className="p-1.5 hover:bg-surface-container-high rounded transition-colors text-on-surface-variant">
+            <button onClick={loadCbom} className="p-1.5 hover:bg-surface-container-high rounded transition-colors text-on-surface-variant" title="Refresh data">
               <span className="material-symbols-outlined text-[20px]">refresh</span>
             </button>
           </div>
@@ -172,7 +200,7 @@ const Cbom = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-container-low">
-              {cbomData.map((item, index) => (
+              {pagedCbom.map((item, index) => (
                 <tr key={index} className="hover:bg-surface-container-low transition-colors group">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -204,13 +232,13 @@ const Cbom = () => {
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button className="text-slate-400 hover:text-primary transition-colors">
+                    <button onClick={() => window.open(apiBase + '/api/cbom', '_blank')} className="text-slate-400 hover:text-primary transition-colors" title="Open full CBOM JSON">
                       <span className="material-symbols-outlined text-[18px]">more_vert</span>
                     </button>
                   </td>
                 </tr>
               ))}
-              {cbomData.length === 0 && (
+              {pagedCbom.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-on-surface-variant text-sm">No CBOM data found.</td>
                 </tr>
@@ -220,16 +248,14 @@ const Cbom = () => {
         </div>
         
         <div className="px-6 py-4 border-t border-surface-container-low flex items-center justify-between text-xs text-on-surface-variant font-medium">
-          <p>Showing 5 of 142 detected cryptographic assets</p>
+          <p>Showing {pagedCbom.length} of {filteredCbom.length} detected cryptographic assets</p>
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full sm:w-auto">
             <div className="flex items-center gap-1">
-              <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high disabled:opacity-30" disabled>
+              <button onClick={() => setPage((prev) => Math.max(0, prev - 1))} className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high disabled:opacity-30" disabled={currentPage === 0}>
                 <span className="material-symbols-outlined text-[20px]">chevron_left</span>
               </button>
-              <button className="w-8 h-8 flex items-center justify-center rounded bg-primary text-white font-bold">1</button>
-              <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high">2</button>
-              <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high">3</button>
-              <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high">
+              <button className="w-8 h-8 flex items-center justify-center rounded bg-primary text-white font-bold">{currentPage + 1}</button>
+              <button onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))} className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container-high disabled:opacity-30" disabled={currentPage >= totalPages - 1}>
                 <span className="material-symbols-outlined text-[20px]">chevron_right</span>
               </button>
             </div>
@@ -273,7 +299,7 @@ const Cbom = () => {
             <div className="relative z-10">
               <h4 className="text-sm font-bold mb-2">PQC Readiness Task</h4>
               <p className="text-xs text-white/80 leading-relaxed mb-4">Your infrastructure contains 3 legacy SHA-1 and 12 RSA-1024 assets that must be rotated within 90 days to meet compliance.</p>
-              <button className="w-full bg-white text-primary py-2 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">Generate Remediation Plan</button>
+              <button onClick={() => window.open(apiBase + '/api/reports/vulnerable-download', '_blank')} className="w-full bg-white text-primary py-2 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">Generate Remediation Plan</button>
             </div>
           </div>
           

@@ -1,21 +1,25 @@
 import { useState, useEffect } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import { useNavigate } from 'react-router-dom';
 
 const AssetInventory = () => {
+  const navigate = useNavigate();
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
   const [assets, setAssets] = useState<any[]>([]);
   const [graphData, setGraphData] = useState<{nodes: any[], links: any[]}>({ nodes: [], links: [] });
   const [filterType, setFilterType] = useState("Asset Type");
   const [filterStatus, setFilterStatus] = useState("Status");
   const [filterRisk, setFilterRisk] = useState("Risk Level");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/assets')
+    fetch(apiBase + '/api/assets')
       .then(res => res.json())
       .then(data => setAssets(data))
       .catch(err => console.error("Failed to fetch assets", err));
 
-    fetch((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/graph')
+    fetch(apiBase + '/api/graph')
       .then(res => res.json())
       .then(data => {
         // Need to format links for force graph (source/target)
@@ -26,7 +30,7 @@ const AssetInventory = () => {
         setGraphData(formattedData);
       })
       .catch(err => console.error("Failed to fetch graph data", err));
-  }, []);
+  }, [apiBase]);
 
   const filteredAssets = assets.filter(a => {
     if (search && !a.name.toLowerCase().includes(search.toLowerCase()) && !(a.ip_address && a.ip_address.includes(search))) return false;
@@ -39,6 +43,15 @@ const AssetInventory = () => {
     if (filterRisk !== "Risk Level" && a.risk && a.risk.risk_level !== filterRisk) return false;
     return true;
   });
+
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(filteredAssets.length / pageSize));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pagedAssets = filteredAssets.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  useEffect(() => {
+    setPage(0);
+  }, [filterType, filterStatus, filterRisk, search, assets.length]);
 
   return (
     <main className="md:ml-64 pt-24 pb-12 px-8">
@@ -129,11 +142,11 @@ const AssetInventory = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/api/reports/download')} className="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-surface-variant transition-colors border border-outline-variant/20 w-full sm:w-auto">
+            <button onClick={() => window.open(apiBase + '/api/reports/download')} className="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-surface-variant transition-colors border border-outline-variant/20 w-full sm:w-auto">
               <span className="material-symbols-outlined text-sm" data-icon="file_download">file_download</span>
               Export
             </button>
-            <button onClick={() => alert("Redirecting to specific 'Add Asset' Wizard.")} className="bg-gradient-to-br from-primary to-primary-container text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity w-full sm:w-auto">
+            <button onClick={() => navigate('/scanner')} className="bg-gradient-to-br from-primary to-primary-container text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity w-full sm:w-auto">
               <span className="material-symbols-outlined text-sm" data-icon="add">add</span>
               Add Asset
             </button>
@@ -155,12 +168,23 @@ const AssetInventory = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/10">
-              {filteredAssets.map(asset => {
+              {pagedAssets.map(asset => {
                 const isHigh = asset.risk?.risk_level === 'High';
                 const isMedium = asset.risk?.risk_level === 'Medium';
                 
                 return (
-                  <tr key={asset.id} className="hover:bg-surface-container-low transition-colors group cursor-pointer">
+                  <tr
+                    key={asset.id}
+                    onClick={() => {
+                      const assetName = String(asset?.name || '');
+                      if (assetName.includes('.')) {
+                        window.open(apiBase + '/api/reports/website/download?domain=' + encodeURIComponent(assetName) + '&x_user_role=Super%20Admin', '_blank');
+                        return;
+                      }
+                      navigate('/scanner');
+                    }}
+                    className="hover:bg-surface-container-low transition-colors group cursor-pointer"
+                  >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded ${isHigh ? 'bg-error/10' : isMedium ? 'bg-secondary/10' : 'bg-primary/10'} flex items-center justify-center`}>
@@ -198,7 +222,7 @@ const AssetInventory = () => {
                   </tr>
                 );
               })}
-              {filteredAssets.length === 0 && (
+              {pagedAssets.length === 0 && (
                 <tr>
                     <td colSpan={7} className="px-6 py-8 text-center text-sm text-on-surface-variant">No assets found matching criteria.</td>
                 </tr>
@@ -209,15 +233,21 @@ const AssetInventory = () => {
 
         {/* Pagination */}
         <div className="px-6 py-4 border-t border-outline-variant/10 flex items-center justify-between bg-surface-container-low">
-            Showing {filteredAssets.length} assets
+            Showing {pagedAssets.length} of {filteredAssets.length} assets
           <div className="flex gap-1">
-            <button className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors">
+            <button
+              onClick={() => setPage((prev) => Math.max(0, prev - 1))}
+              disabled={currentPage === 0}
+              className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors disabled:opacity-40"
+            >
               <span className="material-symbols-outlined text-sm" data-icon="chevron_left">chevron_left</span>
             </button>
-            <button className="w-8 h-8 flex items-center justify-center rounded bg-primary text-white text-xs font-bold">1</button>
-            <button className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors text-xs font-medium">2</button>
-            <button className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors text-xs font-medium">3</button>
-            <button className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors">
+            <button className="w-8 h-8 flex items-center justify-center rounded bg-primary text-white text-xs font-bold">{currentPage + 1}</button>
+            <button
+              onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
+              disabled={currentPage >= totalPages - 1}
+              className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant/30 text-on-surface-variant hover:bg-white transition-colors disabled:opacity-40"
+            >
               <span className="material-symbols-outlined text-sm" data-icon="chevron_right">chevron_right</span>
             </button>
           </div>
@@ -259,7 +289,7 @@ const AssetInventory = () => {
           <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
           <h3 className="text-white font-bold text-base mb-2 relative z-10">Automated Discovery</h3>
           <p className="text-blue-100 text-xs leading-relaxed mb-6 relative z-10">Discovery agents identified 14 new endpoints in the last 24 hours. Would you like to categorize them now?</p>
-          <button onClick={() => alert("Navigating to review portal...")} className="w-full py-2.5 bg-white text-primary text-xs font-bold rounded-lg hover:bg-blue-50 transition-colors shadow-sm relative z-10">Review New Assets</button>
+          <button onClick={() => navigate('/asset-discovery')} className="w-full py-2.5 bg-white text-primary text-xs font-bold rounded-lg hover:bg-blue-50 transition-colors shadow-sm relative z-10">Review New Assets</button>
           <div className="mt-4 pt-4 border-t border-white/10 relative z-10">
             <div className="flex items-center gap-2 text-[10px] font-bold text-blue-200 uppercase tracking-widest">
               <span className="material-symbols-outlined text-xs" data-icon="sync">sync</span>

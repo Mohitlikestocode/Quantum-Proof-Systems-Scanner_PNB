@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 type RiskSummary = {
   total_assets: number;
@@ -12,6 +13,7 @@ type RiskSummary = {
 };
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
   const [summary, setSummary] = useState<RiskSummary>({
     total_assets: 0,
@@ -150,7 +152,18 @@ const Dashboard = () => {
                 const risk = String(asset?.risk?.risk_level || '').toLowerCase();
                 const dotClass = risk.includes('high') || risk.includes('critical') ? 'bg-error animate-pulse' : risk.includes('medium') ? 'bg-secondary-container' : 'bg-tertiary';
                 return (
-                  <tr key={asset.id} className="hover:bg-surface-container-low transition-colors cursor-pointer">
+                  <tr
+                    key={asset.id}
+                    onClick={() => {
+                      const assetName = String(asset?.name || '');
+                      if (assetName.includes('.')) {
+                        window.open(apiBase + '/api/reports/website/download?domain=' + encodeURIComponent(assetName) + '&x_user_role=Super%20Admin', '_blank');
+                        return;
+                      }
+                      navigate('/asset-inventory');
+                    }}
+                    className="hover:bg-surface-container-low transition-colors cursor-pointer"
+                  >
                     <td className="px-6 py-4">
                       <p className="text-xs font-bold text-on-surface">{asset.name}</p>
                       <p className="text-[10px] text-slate-400">{asset.ip_address || scan.ipv4 || 'N/A'}</p>

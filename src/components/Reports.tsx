@@ -328,7 +328,7 @@ const Reports = () => {
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Historical Audit Logs</h3>
                 <div className="flex items-center gap-2">
                   <input value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value)} className="px-4 py-1.5 text-xs bg-surface-container-low border-none rounded-lg focus:ring-1 focus:ring-primary w-64 outline-none w-full sm:w-64" placeholder="Filter by domain..." type="text" />
-                  <button className="p-1.5 hover:bg-surface-container-low rounded transition-colors">
+                  <button onClick={() => setHistoryFilter(historyFilter.trim())} className="p-1.5 hover:bg-surface-container-low rounded transition-colors" title="Apply filter">
                     <span className="material-symbols-outlined text-on-surface-variant" data-icon="filter_list">filter_list</span>
                   </button>
                 </div>
