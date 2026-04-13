@@ -1,11 +1,17 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Literal
 import asyncio
 import datetime
+import ipaddress
+import re
+import time
 import uuid
+from collections import defaultdict, deque
+from threading import Lock
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Load environment variables (SMTP_EMAIL, SMTP_PASSWORD, GEMINI_API_KEY)
 load_dotenv()
@@ -55,6 +61,87 @@ def _build_mobile_rows_from_assets(assets: List[dict]) -> List[dict]:
     return rows
 
 
+DOMAIN_PATTERN = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$", re.IGNORECASE)
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_RULES = {
+    "scan": 6,
+    "chat": 8,
+    "email": 4,
+    "report": 12,
+    "auth": 10,
+}
+_rate_limit_store = defaultdict(deque)
+_rate_limit_lock = Lock()
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit(request: Request, bucket: str, limit: Optional[int] = None) -> None:
+    max_requests = limit or RATE_LIMIT_RULES.get(bucket, 10)
+    key = f"{_client_ip(request)}:{bucket}"
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+
+    with _rate_limit_lock:
+        requests_window = _rate_limit_store[key]
+        while requests_window and requests_window[0] < cutoff:
+            requests_window.popleft()
+        if len(requests_window) >= max_requests:
+            raise HTTPException(status_code=429, detail=f"Rate limit exceeded for {bucket} actions. Please retry shortly.")
+        requests_window.append(now)
+
+
+def _is_public_ip_or_domain(value: str) -> bool:
+    target = (value or "").strip().lower()
+    if not target:
+        return False
+
+    try:
+        ip_obj = ipaddress.ip_address(target)
+        return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved)
+    except ValueError:
+        pass
+
+    if target in {"localhost", "localhost.localdomain", "127.0.0.1", "::1"}:
+        return False
+    return bool(DOMAIN_PATTERN.match(target))
+
+
+def _validate_domain(domain: str) -> str:
+    normalized = _normalize_domain(domain)
+    if not normalized or not _is_public_ip_or_domain(normalized):
+        raise HTTPException(status_code=400, detail="Enter a valid public domain name.")
+    return normalized
+
+
+def _validate_email(email: str) -> str:
+    normalized = (email or "").strip().lower()
+    if not normalized or not EMAIL_PATTERN.match(normalized):
+        raise HTTPException(status_code=400, detail="Enter a valid recipient email address.")
+    return normalized
+
+
 app = FastAPI(title="Quantum-Proof Systems Scanner API")
 
 # Setup CORS for Frontend
@@ -65,6 +152,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
 
 @app.on_event("startup")
 def startup_event():
@@ -109,9 +197,12 @@ from fastapi import Header
 from .engines.risk_engine import calculate_advanced_risk
 
 @app.post("/api/scan")
-def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_role: Optional[str] = Header(None)):
+def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_role: Optional[str] = Header(None), client_request: Request = None):
     """Executes the cryptographic scanner on a domain and computes advanced quantum risk."""
-    domain = request.domain
+    if client_request:
+        _rate_limit(client_request, "scan")
+
+    domain = _validate_domain(request.domain)
     
     # 1. Run full discovery scan
     scan_data = scan_target(domain, mode=request.mode or "Full Deep Scan")
@@ -203,10 +294,14 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_user_rol
 
 
 @app.post("/api/schedule")
-def schedule_scan(request: ScheduleRequest):
+def schedule_scan(request: ScheduleRequest, client_request: Request):
     """Create a recurring scan job from the Scanner scheduling form."""
+    _rate_limit(client_request, "auth")
     day_of_week = (request.day_of_week or "mon").lower()[:3]
     day_of_month = request.day_of_month if request.day_of_month is not None else 1
+
+    request.domain = _validate_domain(request.domain)
+    request.email = _validate_email(request.email)
 
     if request.frequency == "weekly":
         valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -233,6 +328,7 @@ def schedule_scan(request: ScheduleRequest):
 @app.get("/api/discover")
 def run_discovery(domain: str):
     """Module 1: Full scan means domain + subdomains"""
+    domain = _validate_domain(domain)
     from .engines.scanner import discover_subdomains
     return discover_subdomains(domain)
 
@@ -636,6 +732,7 @@ def report_overview():
 @app.get("/api/reports/website")
 def report_website(domain: str):
     """Return a single website-specific report for the latest matching scan."""
+    domain = _validate_domain(domain)
     all_assets = get_all_assets_list()
     matching_assets = [a for a in all_assets if str(a.get("name", "")).lower() == domain.lower()]
 
@@ -670,6 +767,7 @@ def report_website(domain: str):
 @app.get("/api/reports/website/download")
 def download_website_report(domain: str, x_user_role: Optional[str] = Query(None), x_user_role_header: Optional[str] = Header(None)):
     """Download a PDF report for a single scanned website/domain."""
+    domain = _validate_domain(domain)
     role = resolve_role(x_user_role_header, x_user_role)
     require_admin_or_super(role)
 
@@ -1024,7 +1122,8 @@ class CompanyEmailReportRequest(BaseModel):
 
 
 def send_company_report_email(recipient: str, domain: str, include_history: bool = True) -> dict:
-    normalized_domain = _normalize_domain(domain)
+    normalized_domain = _validate_domain(domain)
+    recipient = _validate_email(recipient)
     matching_assets = _get_assets_for_domain(normalized_domain)
     if not matching_assets:
         raise HTTPException(status_code=404, detail="No scan history found for the requested domain.")
@@ -1075,8 +1174,9 @@ def send_company_report_email(recipient: str, domain: str, include_history: bool
 
 
 @app.post("/api/reports/company/email")
-def email_company_report(request: CompanyEmailReportRequest):
+def email_company_report(request: CompanyEmailReportRequest, client_request: Request):
     """Send a domain-specific report bundle to email, including historical scans for that domain."""
+    _rate_limit(client_request, "email")
     return send_company_report_email(request.recipient, request.domain, request.include_history)
 
 # --- MODULE 9: AI CHATBOT ---
@@ -1084,8 +1184,11 @@ class ChatRequest(BaseModel):
     message: str
 
 @app.post("/api/chat")
-def chat_with_assistant(request: ChatRequest):
+def chat_with_assistant(request: ChatRequest, client_request: Request):
     """Processes user queries into actionable commands using hybrid parsing."""
+    _rate_limit(client_request, "chat")
+    if not request.message or len(request.message) > 2000:
+        raise HTTPException(status_code=400, detail="Message is required and must be under 2000 characters.")
     result = process_chat_message(request.message)
     
     if result["action"] == "SCHEDULE_SCAN":
@@ -1197,7 +1300,8 @@ def build_auth_session(user: dict) -> dict:
     }
 
 @app.post("/api/auth/send-otp")
-def auth_send_otp(request: OTPRequest):
+def auth_send_otp(request: OTPRequest, client_request: Request):
+    _rate_limit(client_request, "auth")
     if request.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role selected.")
 
@@ -1214,7 +1318,7 @@ def auth_send_otp(request: OTPRequest):
     }
     subject = "Quantum Shield Auth Code"
     body = f"Your secure 6-digit authentication code is: {code}\n\nThis code will expire shortly. Do not share it."
-    send_email(request.email, subject, body)
+    send_email(_validate_email(request.email), subject, body)
     return {"message": "OTP sent successfully"}
 
 @app.post("/api/auth/verify-otp")
@@ -1255,11 +1359,13 @@ class EmailRequest(BaseModel):
     include_history: bool = True
 
 @app.post("/api/email")
-def send_report(request: EmailRequest):
+def send_report(request: EmailRequest, client_request: Request):
     """Email a domain-specific report bundle when a domain is provided; fallback to queue-style response otherwise."""
+    _rate_limit(client_request, "email")
+    recipient = _validate_email(request.recipient)
     if request.domain:
-        return send_company_report_email(request.recipient, request.domain, request.include_history)
-    return {"status": "success", "message": f"Enterprise Cryptographic Risk Report queued for {request.recipient}"}
+        return send_company_report_email(recipient, request.domain, request.include_history)
+    return {"status": "success", "message": f"Enterprise Cryptographic Risk Report queued for {recipient}"}
 
 
 if __name__ == "__main__":
