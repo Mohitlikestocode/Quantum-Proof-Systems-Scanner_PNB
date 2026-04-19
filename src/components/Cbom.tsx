@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 const Cbom = () => {
   const navigate = useNavigate();
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const [cbomData, setCbomData] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(0);
@@ -333,3 +333,4 @@ const Cbom = () => {
 };
 
 export default Cbom;
+

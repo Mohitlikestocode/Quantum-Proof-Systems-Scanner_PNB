@@ -39,15 +39,19 @@ def _resolve_scan_profile(mode: str) -> dict:
     if "quick" in normalized:
         return {
             "mode": "Quick Scan",
-            "subdomain_limit": 15,
-            "subdomain_workers": 8,
-            "vuln_target_limit": 8,
+            "subdomain_limit": 8,
+            "subdomain_workers": 6,
+            "vuln_target_limit": 3,
+            "include_mobile_discovery": False,
+            "include_subdomain_vuln_scan": False,
         }
     return {
         "mode": "Full Deep Scan",
         "subdomain_limit": MAX_SUBDOMAINS_TO_SCAN,
         "subdomain_workers": SUBDOMAIN_SCAN_WORKERS,
         "vuln_target_limit": MAX_VULN_SCAN_TARGETS,
+        "include_mobile_discovery": True,
+        "include_subdomain_vuln_scan": True,
     }
 
 PQC_GROUP_ID_MAP = {
@@ -1437,10 +1441,47 @@ def scan_target(domain: str, mode: str = "Full Deep Scan") -> dict:
     main_domain_data = subdomain_discovery["main_domain"]
 
     ipv4, ipv6 = _resolve_ips(domain_clean)
-    vulnerabilities, hosting = discover_vulnerabilities(domain_clean)
-    mobile_info = discover_mobile_apps(domain_clean)
-    vuln_targets = [sub.get("subdomain") for sub in subdomain_discovery.get("all_subdomains", []) if sub.get("subdomain")]
-    vulnerability_scan = run_subdomain_vulnerability_scanner(vuln_targets, max_targets=profile["vuln_target_limit"])
+
+    # Run independent network probes in parallel to reduce wall-clock scan time.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        vuln_future = executor.submit(discover_vulnerabilities, domain_clean)
+        mobile_future = None
+        if profile.get("include_mobile_discovery", True):
+            mobile_future = executor.submit(discover_mobile_apps, domain_clean)
+
+        vulnerabilities, hosting = vuln_future.result()
+        mobile_info = mobile_future.result() if mobile_future else {
+            "mobile_apps_found": 0,
+            "android_apps_found": 0,
+            "ios_apps_found": 0,
+            "apps": [],
+            "most_relevant_app": None,
+            "brand_hints": {"queries": [], "acronyms": [], "title": None},
+        }
+
+    vulnerability_scan = {
+        "scanner_name": "Subdomain Vulnerability Scanner",
+        "scan_targets": 0,
+        "scan_limit": profile["vuln_target_limit"],
+        "results": [],
+        "total_vulnerabilities": 0,
+        "severity_breakdown": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0},
+        "vulnerability_types": {},
+        "top_findings": [],
+    }
+
+    if profile.get("include_subdomain_vuln_scan", True):
+        # Scan only active subdomains to avoid long waits on inactive/unreachable hosts.
+        vuln_targets = [
+            sub.get("subdomain")
+            for sub in subdomain_discovery.get("all_subdomains", [])
+            if sub.get("subdomain") and sub.get("is_active")
+        ]
+        vulnerability_scan = run_subdomain_vulnerability_scanner(
+            vuln_targets,
+            max_targets=profile["vuln_target_limit"],
+        )
+
     if vulnerability_scan.get("top_findings"):
         vulnerabilities = [
             {

@@ -14,7 +14,7 @@ type RiskSummary = {
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const [summary, setSummary] = useState<RiskSummary>({
     total_assets: 0,
     apis: 0,
@@ -188,3 +188,4 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
+

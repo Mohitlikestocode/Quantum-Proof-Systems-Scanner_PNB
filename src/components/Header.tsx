@@ -70,3 +70,4 @@ const Header = ({ setSidebarOpen, onSwitchAccount }: HeaderProps) => {
 };
 
 export default Header;
+

@@ -7,7 +7,7 @@ const AIAssistant = () => {
   const [toastMsg, setToastMsg] = useState("");
   const [showActiveContext, setShowActiveContext] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const inFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ message: string; ts: number } | null>(null);
   const [messages, setMessages] = useState<any[]>([
@@ -300,7 +300,7 @@ const AIAssistant = () => {
                       <span className="material-symbols-outlined text-[14px]">history</span>
                       RESTORE SESSION
                     </button>
-                    <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8010') + '/docs', '_blank')} className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
+                    <button onClick={() => window.open((import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/docs', '_blank')} className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface-variant cursor-pointer hover:text-primary transition-colors">
                       <span className="material-symbols-outlined text-[14px]">auto_fix</span>
                       MODEL SETTINGS
                     </button>
@@ -352,3 +352,4 @@ const AIAssistant = () => {
 };
 
 export default AIAssistant;
+

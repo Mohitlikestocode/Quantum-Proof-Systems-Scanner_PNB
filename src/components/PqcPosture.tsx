@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 
 const PqcPosture = () => {
   const navigate = useNavigate();
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   return (
     <main className="md:ml-64 pt-24 px-8 pb-12 min-h-screen">
       <header className="mb-8">
@@ -242,3 +242,4 @@ const PqcPosture = () => {
 };
 
 export default PqcPosture;
+

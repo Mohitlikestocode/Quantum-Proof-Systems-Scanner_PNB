@@ -10,6 +10,15 @@ def calculate_advanced_risk(
     pqc_status: str = "None",
 ) -> dict:
     """Mathematical Risk Engine and Classification based on feedback.md."""
+    weights = {
+        "crypto": 0.30,
+        "protocol": 0.20,
+        "vulnerability": 0.20,
+        "exposure": 0.10,
+        "third_party": 0.10,
+        "governance": 0.10,
+    }
+    adjustments = []
     
     # 1. Crypto Risk (max 100)
     crypto_risk = 0
@@ -41,8 +50,10 @@ def calculate_advanced_risk(
     if pqc_kem_detected:
         if "FULL" in pqc_status_upper:
             crypto_risk = max(0, crypto_risk - 45)
+            adjustments.append("Crypto risk reduced by 45 for Full PQC KEM negotiation")
         elif "HYBRID" in pqc_status_upper:
             crypto_risk = max(0, crypto_risk - 35)
+            adjustments.append("Crypto risk reduced by 35 for Hybrid PQC KEM negotiation")
 
     # 2. Protocol Risk (max 100)
     protocol_risk = 0
@@ -62,8 +73,10 @@ def calculate_advanced_risk(
     if pqc_kem_detected:
         if "FULL" in pqc_status_upper:
             protocol_risk = max(0, protocol_risk - 20)
+            adjustments.append("Protocol risk reduced by 20 for Full PQC KEM negotiation")
         elif "HYBRID" in pqc_status_upper:
             protocol_risk = max(0, protocol_risk - 12)
+            adjustments.append("Protocol risk reduced by 12 for Hybrid PQC KEM negotiation")
 
     # 3. Vulnerability Risk (max 100)
     vuln_risk = 0
@@ -86,25 +99,34 @@ def calculate_advanced_risk(
 
     # CALCULATE FINAL SCORE
     total_penalty = (
-        0.30 * crypto_risk +
-        0.20 * protocol_risk +
-        0.20 * vuln_risk +
-        0.10 * exposure_risk +
-        0.10 * third_party_risk +
-        0.10 * gov_risk
+        weights["crypto"] * crypto_risk +
+        weights["protocol"] * protocol_risk +
+        weights["vulnerability"] * vuln_risk +
+        weights["exposure"] * exposure_risk +
+        weights["third_party"] * third_party_risk +
+        weights["governance"] * gov_risk
     )
-    
-    score = int(max(0, 100 - total_penalty))
+
+    score_pre_overrides = int(max(0, 100 - total_penalty))
+    score = score_pre_overrides
 
     # PQC-aware floor: if endpoint already negotiates PQC KEM, avoid classifying as overly critical.
     if pqc_kem_detected:
         if "FULL" in pqc_status_upper:
-            score = max(score, 72)
+            floor = 72
+            if score < floor:
+                adjustments.append("Score floor applied to 72 for Full PQC endpoint")
+            score = max(score, floor)
         elif "HYBRID" in pqc_status_upper:
-            score = max(score, 65)
+            floor = 65
+            if score < floor:
+                adjustments.append("Score floor applied to 65 for Hybrid PQC endpoint")
+            score = max(score, floor)
     
     # Certificate expiry overrides
     if days_to_expiry < 0:
+        if score > 10:
+            adjustments.append("Expired certificate cap applied: score limited to 10")
         score = min(score, 10)
         
     # CLASSIFICATION ENGINE
@@ -140,12 +162,25 @@ def calculate_advanced_risk(
 
     return {
         "score": score,
+        "score_pre_overrides": score_pre_overrides,
+        "total_penalty": round(total_penalty, 2),
         "risk_level": risk_level,
         "status": status,
         "label": label,
         "category": category,
         "pqc_status": pqc_status,
         "pqc_kem_detected": pqc_kem_detected,
+        "formula_version": "v2-6factor-weighted-penalty",
+        "weights": weights,
+        "components": {
+            "crypto": crypto_risk,
+            "protocol": protocol_risk,
+            "vulnerability": vuln_risk,
+            "exposure": exposure_risk,
+            "third_party": third_party_risk,
+            "governance": gov_risk,
+        },
+        "adjustments": adjustments,
         "baseline_score": baseline_score,
         "improvement": improvement,
         "reason": f"Calculated based on 6-factor model. Baseline score: {baseline_score}",

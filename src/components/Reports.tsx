@@ -18,7 +18,7 @@ type ReportHistoryRow = {
 };
 
 const Reports = () => {
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const [overview, setOverview] = useState<ReportsOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyRows, setHistoryRows] = useState<ReportHistoryRow[]>([]);
@@ -392,3 +392,4 @@ const Reports = () => {
 };
 
 export default Reports;
+

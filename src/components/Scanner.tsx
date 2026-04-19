@@ -19,7 +19,7 @@ const Scanner = () => {
   const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('scannerTheme') === 'dark');
   const [scanMode, setScanMode] = useState<'Full Deep Scan' | 'Quick Scan'>('Full Deep Scan');
   const role = localStorage.getItem('userRole') || 'User';
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   const mobileApps = useMemo(() => scanResult?.scan_result?.mobile_info?.apps || [], [scanResult]);
   const topMobileMatch = scanResult?.scan_result?.mobile_info?.most_relevant_app;
@@ -44,6 +44,48 @@ const Scanner = () => {
       payloads: subdomainCount + vulnTargets,
     };
   }, [scanResult]);
+
+  const riskWeights = scanResult?.risk?.weights || {
+    crypto: 0.3,
+    protocol: 0.2,
+    vulnerability: 0.2,
+    exposure: 0.1,
+    third_party: 0.1,
+    governance: 0.1,
+  };
+
+  const riskComponents = scanResult?.risk?.components || {
+    crypto: 0,
+    protocol: 0,
+    vulnerability: 0,
+    exposure: 0,
+    third_party: 0,
+    governance: 0,
+  };
+
+  const riskRows = [
+    { key: 'crypto', label: 'Crypto' },
+    { key: 'protocol', label: 'Protocol' },
+    { key: 'vulnerability', label: 'Vulnerability' },
+    { key: 'exposure', label: 'Exposure' },
+    { key: 'third_party', label: 'Third-Party' },
+    { key: 'governance', label: 'Governance' },
+  ];
+
+  const riskContributionRows = riskRows.map((row) => {
+    const factorValue = Number(riskComponents?.[row.key] || 0);
+    const weight = Number(riskWeights?.[row.key] || 0);
+    return {
+      ...row,
+      factorValue,
+      weight,
+      contribution: Number((factorValue * weight).toFixed(2)),
+    };
+  });
+
+  const computedPenalty = Number(
+    riskContributionRows.reduce((sum, row) => sum + row.contribution, 0).toFixed(2)
+  );
 
   const subdomainRows = useMemo(() => {
     const rows = scanResult?.scan_result?.all_subdomains_detailed || [];
@@ -351,10 +393,10 @@ const Scanner = () => {
                 <div className="bg-surface-container-low rounded-lg p-5">
                   <p className="text-[0.6875rem] font-bold text-on-surface-variant uppercase tracking-widest mb-2">Quantum Risk Index</p>
                   <div className="flex items-baseline justify-between">
-                    <span className={`text-xl font-bold ${scanResult?.risk?.risk_level === 'High' ? 'text-error' : scanResult?.risk?.risk_level === 'Medium' ? 'text-secondary' : 'text-tertiary'}`}>
+                    <span className={`text-xl font-bold ${scanResult?.risk?.risk_level === 'Critical' || scanResult?.risk?.risk_level === 'High' ? 'text-error' : scanResult?.risk?.risk_level === 'Medium' ? 'text-secondary' : 'text-tertiary'}`}>
                       {scanResult?.risk?.risk_level ? `${scanResult.risk.risk_level} Risk` : '---'}
                     </span>
-                    <span className={`text-[0.625rem] font-bold py-0.5 px-2 ${scanResult?.risk?.risk_level === 'High' ? 'bg-error' : scanResult?.risk?.risk_level === 'Medium' ? 'bg-secondary' : 'bg-tertiary'} text-white rounded`}>
+                    <span className={`text-[0.625rem] font-bold py-0.5 px-2 ${scanResult?.risk?.risk_level === 'Critical' || scanResult?.risk?.risk_level === 'High' ? 'bg-error' : scanResult?.risk?.risk_level === 'Medium' ? 'bg-secondary' : 'bg-tertiary'} text-white rounded`}>
                       {scanResult?.risk?.score || 0}%
                     </span>
                   </div>
@@ -720,16 +762,39 @@ const Scanner = () => {
                 <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
                   <p className="font-bold text-on-surface mb-2">Core Score Formula</p>
                   <div className="font-mono text-[11px] leading-6 bg-surface-container-highest rounded p-3 border border-outline-variant/20">
-                    <p>Total Penalty = (0.30 x Crypto) + (0.20 x Protocol) + (0.20 x Vulnerability) + (0.10 x Exposure) + (0.10 x Third-Party) + (0.10 x Governance)</p>
-                    <div className="mt-3 flex items-center gap-2 text-on-surface">
-                      <span>Score</span>
-                      <span>=</span>
-                      <div className="inline-flex flex-col items-center min-w-[170px]">
-                        <span className="border-b border-on-surface px-2 text-center">100 - Total Penalty</span>
-                        <span className="px-2 text-center">1</span>
-                      </div>
-                    </div>
-                    <p className="mt-3">Score = max(0, Score)</p>
+                    <p>Total Penalty = (w1 x Crypto) + (w2 x Protocol) + (w3 x Vulnerability) + (w4 x Exposure) + (w5 x Third-Party) + (w6 x Governance)</p>
+                    <p className="mt-2">Score (raw) = max(0, 100 - Total Penalty)</p>
+                    <p className="mt-2">Final Score applies post-rules: PQC floor and expired certificate cap.</p>
+                    <p className="mt-2 text-[10px]">Formula Version: {scanResult?.risk?.formula_version || 'v2-6factor-weighted-penalty'}</p>
+                  </div>
+                </div>
+
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Live Factor Contributions</p>
+                  <div className="font-mono text-[10px] leading-5 bg-surface-container-highest rounded p-3 border border-outline-variant/20 overflow-x-auto">
+                    <table className="w-full min-w-[420px] text-left">
+                      <thead>
+                        <tr className="text-on-surface-variant">
+                          <th className="pr-3">Factor</th>
+                          <th className="pr-3">Value</th>
+                          <th className="pr-3">Weight</th>
+                          <th>Weighted</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {riskContributionRows.map((row) => (
+                          <tr key={row.key} className="text-on-surface">
+                            <td className="pr-3 py-1">{row.label}</td>
+                            <td className="pr-3 py-1">{row.factorValue}</td>
+                            <td className="pr-3 py-1">{row.weight.toFixed(2)}</td>
+                            <td className="py-1">{row.contribution.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="mt-3">Total Penalty = {scanResult?.risk?.total_penalty ?? computedPenalty}</p>
+                    <p>Score (raw) = {scanResult?.risk?.score_pre_overrides ?? Math.max(0, Math.floor(100 - (scanResult?.risk?.total_penalty ?? computedPenalty)))}</p>
+                    <p>Score (final) = {scanResult?.risk?.score ?? 0}</p>
                   </div>
                 </div>
 
@@ -753,6 +818,19 @@ const Scanner = () => {
                   <p>60-79: Medium (Quantum Safe)</p>
                   <p>40-59: High (Needs Upgrade)</p>
                   <p>&lt;40: Critical (Not Safe)</p>
+                </div>
+
+                <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
+                  <p className="font-bold text-on-surface mb-2">Post-Formula Adjustments</p>
+                  {Array.isArray(scanResult?.risk?.adjustments) && scanResult.risk.adjustments.length > 0 ? (
+                    <div className="space-y-1">
+                      {scanResult.risk.adjustments.map((item: string, idx: number) => (
+                        <p key={`${item}-${idx}`}>- {item}</p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>No post-formula adjustments were applied for this scan.</p>
+                  )}
                 </div>
 
                 <div className="bg-surface-container-low rounded p-3 border border-outline-variant/20">
@@ -787,3 +865,4 @@ const Scanner = () => {
 };
 
 export default Scanner;
+

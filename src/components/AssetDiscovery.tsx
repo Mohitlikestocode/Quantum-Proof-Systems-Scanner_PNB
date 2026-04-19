@@ -6,7 +6,7 @@ type DiscoveryTab = 'Domains' | 'SSL Certificates' | 'IP Addresses/Subnets' | 'S
 
 const AssetDiscovery = () => {
   const navigate = useNavigate();
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   const [assets, setAssets] = useState<any[]>([]);
   const [graphData, setGraphData] = useState<{ nodes: any[]; links: any[] }>({ nodes: [], links: [] });
@@ -279,3 +279,4 @@ const AssetDiscovery = () => {
 };
 
 export default AssetDiscovery;
+

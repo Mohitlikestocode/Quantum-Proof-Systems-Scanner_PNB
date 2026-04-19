@@ -373,6 +373,8 @@ Inputs:
 5. `vulnerabilities`
 6. `hosting`
 7. `has_owner` defaulting to `True`
+8. `pqc_kem_detected`
+9. `pqc_status`
 
 ### Factor 1: Crypto risk
 
@@ -431,6 +433,17 @@ Then:
 ```text
 score = max(0, 100 - total_penalty)
 ```
+
+### PQC adjustments and post-rules
+
+If PQC KEM is detected, the engine applies additional reductions before final score guards:
+1. Full PQC: crypto `-45`, protocol `-20`
+2. Hybrid PQC: crypto `-35`, protocol `-12`
+
+After computing weighted score:
+1. Full PQC score floor: minimum `72`
+2. Hybrid PQC score floor: minimum `65`
+3. Certificate expiry cap still applies last: if expired, score max is `10`
 
 Certificate expiry override:
 1. If `days_to_expiry < 0`, the score is capped at 10.
@@ -507,10 +520,16 @@ The scanner UI relies on these exact response paths:
 
 ### Summary and risk
 1. `risk.score`
-2. `risk.risk_level`
-3. `risk.status`
-4. `risk.label`
-5. `risk.category`
+2. `risk.score_pre_overrides`
+3. `risk.total_penalty`
+4. `risk.weights`
+5. `risk.components`
+6. `risk.adjustments`
+7. `risk.formula_version`
+8. `risk.risk_level`
+9. `risk.status`
+10. `risk.label`
+11. `risk.category`
 
 ### Primary scan fields
 1. `scan_result.tls_version`

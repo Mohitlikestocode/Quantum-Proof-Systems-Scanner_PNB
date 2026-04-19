@@ -12,7 +12,7 @@ class Vulnerability(BaseModel):
 class MobileApp(BaseModel):
     platform: str
     name: str
-    risk_score: int
+    risk_score: Optional[int] = None
 
 class SubdomainInfo(BaseModel):
     subdomain: str
@@ -33,10 +33,16 @@ class SubdomainInfo(BaseModel):
 
 class RiskScore(BaseModel):
     score: int
+    score_pre_overrides: Optional[int] = None
+    total_penalty: Optional[float] = None
     risk_level: str
     status: str
     label: str
     category: Optional[str] = None
+    formula_version: Optional[str] = None
+    weights: Optional[dict] = None
+    components: Optional[dict] = None
+    adjustments: Optional[List[str]] = None
     baseline_score: Optional[int] = None
     improvement: Optional[str] = None
 

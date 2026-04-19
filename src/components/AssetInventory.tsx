@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 const AssetInventory = () => {
   const navigate = useNavigate();
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const [assets, setAssets] = useState<any[]>([]);
   const [graphData, setGraphData] = useState<{nodes: any[], links: any[]}>({ nodes: [], links: [] });
   const [filterType, setFilterType] = useState("Asset Type");
@@ -303,3 +303,4 @@ const AssetInventory = () => {
 };
 
 export default AssetInventory;
+
