@@ -11,6 +11,7 @@ import PqcPosture from './components/PqcPosture';
 import CyberRating from './components/CyberRating';
 import Reports from './components/Reports';
 import Login from './components/Login';
+import MythosDefense from './components/MythosDefense';
 import { useState } from 'react';
 
 type AuthSession = {
@@ -49,7 +50,7 @@ function App() {
   
   return (
     <Router>
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-background">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
         <Header setSidebarOpen={setSidebarOpen} onSwitchAccount={handleLogout} />
         <Routes>
@@ -61,6 +62,7 @@ function App() {
           <Route path="/cbom" element={<Cbom />} />
           <Route path="/pqc-posture" element={<PqcPosture />} />
           <Route path="/cyber-rating" element={<CyberRating />} />
+          <Route path="/mythos-defense" element={<MythosDefense />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/ai-assistant" element={<AIAssistant />} />
           <Route path="*" element={<Dashboard />} />

@@ -75,6 +75,11 @@ const Sidebar = ({ isOpen, setIsOpen }: SidebarProps) => {
           <span className="material-symbols-outlined text-[20px]" data-icon="speed">speed</span>
           <span className="font-sans text-[0.875rem] font-medium tracking-tight">Cyber Rating</span>
         </NavLink>
+
+        <NavLink to="/mythos-defense" className={getNavLinkClass}>
+          <span className="material-symbols-outlined text-[20px]" data-icon="shield">shield</span>
+          <span className="font-sans text-[0.875rem] font-medium tracking-tight">OS & Mythos Shield</span>
+        </NavLink>
         
         <NavLink to="/reports" className={getNavLinkClass}>
           <span className="material-symbols-outlined text-[20px]" data-icon="assessment">assessment</span>

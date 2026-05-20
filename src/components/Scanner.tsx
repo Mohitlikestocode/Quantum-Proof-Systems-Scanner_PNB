@@ -16,7 +16,6 @@ const Scanner = () => {
   const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState(1);
   const [scheduleEmail, setScheduleEmail] = useState(localStorage.getItem('userEmail') || 'admin@quantumshield.local');
   const [isScheduling, setIsScheduling] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('scannerTheme') === 'dark');
   const [scanMode, setScanMode] = useState<'Full Deep Scan' | 'Quick Scan'>('Full Deep Scan');
   const role = localStorage.getItem('userRole') || 'User';
   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -122,9 +121,7 @@ const Scanner = () => {
     setSubdomainPage(0);
   }, [scanResult, statusFilter, bucketFilter, subdomainQuery]);
 
-  useEffect(() => {
-    localStorage.setItem('scannerTheme', isDarkMode ? 'dark' : 'light');
-  }, [isDarkMode]);
+
 
   const handshakeStatus = useMemo(() => {
     const discovery = scanResult?.scan_result?.subdomains_discovery;
@@ -233,7 +230,7 @@ const Scanner = () => {
     }
   };
   return (
-    <main className={`md:ml-64 pt-24 pb-12 px-8 min-h-screen scanner-scope ${isDarkMode ? 'scanner-dark' : ''}`}>
+    <main className="md:ml-64 pt-24 pb-12 px-8 min-h-screen scanner-scope">
       <div className="max-w-6xl mx-auto">
         {/* Page Header */}
         <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
@@ -247,15 +244,6 @@ const Scanner = () => {
             <p className="text-on-surface-variant mt-2 max-w-xl">Initiate comprehensive cryptographic audits to identify legacy algorithms vulnerable to Shor's algorithm and ensure PQC compliance.</p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsDarkMode((prev) => !prev)}
-              className="h-9 px-3 rounded-md border border-outline-variant/40 bg-surface-container-highest text-on-surface text-xs font-semibold flex items-center gap-1.5 hover:bg-surface-dim transition-all"
-              title="Toggle Scanner Dark Mode"
-              aria-label="Toggle Scanner Dark Mode"
-            >
-              <span className="material-symbols-outlined text-sm">{isDarkMode ? 'light_mode' : 'dark_mode'}</span>
-              {isDarkMode ? 'Light' : 'Dark'}
-            </button>
             <button
               onClick={() => {
                 if (!target.trim()) {

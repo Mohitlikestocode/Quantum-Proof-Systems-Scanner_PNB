@@ -27,6 +27,13 @@ from .engines.cbom_generator import generate_cbom
 from .engines.chatbot import process_chat_message, summarize_report, send_email
 from .engines.scheduler import start_scheduler, schedule_scan_job
 from .engines.report_generator import generate_pdf_report
+from .engines.os_shield_engine import (
+    calculate_os_vulnerabilities,
+    generate_os_pdf_report,
+    generate_zip_bundle,
+    WINDOWS_VULN_DB,
+    UPGRADE_MIGRATION_PROFILES
+)
 
 def get_all_assets_list():
     return list(db_assets.values())
@@ -1077,6 +1084,44 @@ def download_mobile_app_pdf(x_user_role: Optional[str] = Query(None), x_user_rol
     pdf_bytes = build_mobile_app_report_pdf()
     date_prefix = datetime.datetime.now().strftime('%Y_%m_%d')
     return _pdf_response(pdf_bytes, f"{date_prefix}-Mobile_App_Report.pdf")
+
+
+@app.get("/api/mythos/vulnerabilities")
+def get_mythos_vulnerabilities(server_name: str, target_os: str):
+    """
+    Get dynamic, offline OS level vulnerability scan results and patch lag calculation.
+    """
+    return calculate_os_vulnerabilities(server_name, target_os)
+
+
+@app.get("/api/mythos/download-pdf")
+def download_mythos_pdf(server_name: str, target_os: str):
+    """
+    Download a detailed PDF containing the OS security audit and migration plan.
+    """
+    scan_results = calculate_os_vulnerabilities(server_name, target_os)
+    pdf_bytes = generate_os_pdf_report(scan_results)
+    filename = f"{server_name.replace(' ', '_')}_{target_os.replace(' ', '_')}_Security_Audit.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.get("/api/mythos/download-zip")
+def download_mythos_zip(server_name: str, target_os: str):
+    """
+    Download a comprehensive ZIP bundle containing the PDF report, JSON analysis, and Hotpatch script.
+    """
+    zip_bytes = generate_zip_bundle(server_name, target_os)
+    filename = f"{server_name.replace(' ', '_')}_{target_os.replace(' ', '_')}_Audit_Bundle.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 
 
 @app.get("/api/reports/history")
